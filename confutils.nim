@@ -99,11 +99,7 @@ when defined(nimscript):
     100000
 
 else:
-  template appInvocation: string =
-    try:
-      getAppFilename().splitFile.name
-    except OSError:
-      ""
+  template appInvocation: string = "ct"
 
 when noColors:
   const
