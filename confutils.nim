@@ -1,6 +1,6 @@
 import
   os,
-  std/[enumutils, options, strutils, wordwrap, strformat],
+  std/[enumutils, options, strutils, wordwrap, strformat, sequtils],
   stew/shims/macros,
   serialization,
   confutils/[defs, cli_parser, config_file]
@@ -166,6 +166,9 @@ func hasOpts(cmd: CmdInfo): bool =
 
 func hasArgs(cmd: CmdInfo): bool =
   cmd.opts.len > 0 and cmd.opts[^1].kind == Arg
+
+func hasAnyArgs(cmd: CmdInfo): bool =
+  cmd.opts.len > 0 and cmd.opts.anyIt(it.kind == Arg)
 
 func firstArgIdx(cmd: CmdInfo): int =
   # This will work correctly only if the command has arguments.
@@ -410,15 +413,18 @@ proc noMoreArgsError(cmd: CmdInfo): string {.raises: [].} =
   result =
     if cmd.isSubCommand:
       try:
-        "The command '$1'" % [cmd.name]
+        "The subcommand '$1'" % [cmd.name]
       except ValueError as err:
         raiseAssert "strutils.`%` failed: " & err.msg
     else:
       appInvocation()
   result.add " does not accept"
-  if cmd.hasArgs: result.add " additional"
+  if cmd.hasAnyArgs: result.add " additional"
   result.add " arguments"
 
+  if not cmd.hasAnyArgs and not cmd.isSubCommand:
+    result = appInvocation() & " has no such subcommand"
+  
 func findOpt(opts: openArray[OptInfo], name: string): OptInfo =
   for opt in opts:
     if cmpIgnoreStyle(opt.name, name) == 0 or
@@ -859,7 +865,8 @@ proc cmdInfoFromType(T: NimNode): CmdInfo =
           for i, previousOpt in cmd.opts:
             let isRequired = not previousOpt.hasDefault
             let isRequiredArg = isRequired and previousOpt.kind == Arg
-            if not isRequiredArg:
+            if not isRequiredArg: # and previousOpt.kind == Arg:
+              # echo previousOpt.repr
               error "not supported: non-required args before {.restOfArgs.}: " &
                 opt.name, field.name
           cmd.hasRestOfArgs = true
@@ -966,6 +973,7 @@ proc loadImpl[C, SecondarySources](
   let confAddr = addr result
 
   template applySetter(setterIdx: int, cmdLineVal: string) =
+    # echo "applySetter ", setterIdx, " ", cmdLineVal
     when defined(nimHasWarnBareExcept):
       {.push warning[BareExcept]:off.}
 
@@ -1115,13 +1123,13 @@ proc loadImpl[C, SecondarySources](
     when key isnot string:
       let key = string(key)
 
-    # echo activeCmds.len, " ", lastCmd.hasRestOfArgs, " ", index, " ", lastCmd.opts.len
+    # echo "active len:", activeCmds.len, " key:", key, " hasRestOfArgs:", lastCmd.hasRestOfArgs, " #", index, " lastCmd opts len:", lastCmd.opts.len
 
     if activeCmds.len > 0 and lastCmd.hasRestOfArgs and
         index >= lastCmd.opts.len: # 1 (cmd) + lastCmd.opts.len - 1 (all before rest)
       # add all others in the simplest way possible to the rest of args seq
       # assume we're on param index(0-based): index + 1 in param index(starting from 1)
-      var restOfArgs: seq[string] = @[]
+      # var restOfArgs: seq[string] = @[]
       for i in index + 1 .. paramCount():
         applySetter(lastCmd.opts[^1].idx, paramStr(i))
       break
@@ -1129,6 +1137,9 @@ proc loadImpl[C, SecondarySources](
 
     case kind
     of cmdLongOption, cmdShortOption:
+      # if lastCmd.hasRestOfArgs:
+      #   applySetter(lastCmd.opts[^1].idx, paramStr(index))
+      #   continue
       processHelpAndVersionOptions key
 
       # echo "processing cli switch ", key, " with val ", val
