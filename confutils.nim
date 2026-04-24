@@ -1119,6 +1119,7 @@ proc loadImpl[C, SecondarySources](
       flushOutputAndQuit QuitSuccess
 
   var index = 0
+  var pendingOpt: OptInfo = nil  # Non-nil when the previous option needs its value from the next token
   for kind, key, val in getopt(cmdLine, shortNoVal = {}, longNoVal = @[]):
     when key isnot string:
       let key = string(key)
@@ -1158,11 +1159,25 @@ proc loadImpl[C, SecondarySources](
             discard
 
       if opt != nil:
-        applySetter(opt.idx, val)
+        if val.len > 0 or opt.typename == "bool":
+          applySetter(opt.idx, val)
+        else:
+          # The option was provided without '=' (e.g. --output-folder /tmp/dir
+          # or -o /tmp/dir).  Nim's parseopt treats the value as a separate
+          # cmdArgument token. Mark this option as pending so the next
+          # cmdArgument iteration consumes it as the value.
+          pendingOpt = opt
       else:
         fail "Unrecognized option '$1'" % [key]
 
     of cmdArgument:
+      # If the previous option was provided without '=' (e.g. -o /tmp/dir),
+      # this argument is the option's value, not a positional argument.
+      if pendingOpt != nil:
+        applySetter(pendingOpt.idx, key)
+        pendingOpt = nil
+        continue
+
       # echo "process cmd option ", key
       if lastCmd.hasSubCommands:
         processHelpAndVersionOptions key
