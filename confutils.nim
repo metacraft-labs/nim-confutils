@@ -3,10 +3,10 @@ import
   std/[enumutils, options, strutils, wordwrap, strformat, sequtils],
   stew/shims/macros,
   serialization,
-  confutils/[defs, cli_parser, config_file]
+  confutils/[defs, cli_parser, config_file, runtime_surface]
 
 export
-  options, serialization, defs, config_file
+  options, serialization, defs, config_file, runtime_surface
 
 const
   useBufferedOutput = defined(nimscript)
@@ -889,6 +889,76 @@ macro configurationRtti(RecordType: type): untyped =
     fieldSetters = generateFieldSetters T
 
   result = newTree(nnkPar, newLitFixed cmdInfo, fieldSetters)
+
+# ---------------------------------------------------------------------------
+# Compile-time bridge: convert the existing ``CmdInfo`` IR into a runtime
+# ``RuntimeCommandSurface`` value. This re-uses the rich pragma extraction
+# done by ``cmdInfoFromType`` and translates its result into the plain-data
+# surface type that the runtime algorithms operate on.
+#
+# Layering: existing confutils users keep their compile-time typed configs
+# unchanged. The bridge gives them a `RuntimeCommandSurface` literal that
+# can be fed into the runtime help / completion / merge algorithms.
+# ---------------------------------------------------------------------------
+
+func cmdInfoToRuntimeFlag(opt: OptInfo): RuntimeFlag =
+  ## Translate an :type:`OptInfo` CLI-switch entry into a plain
+  ## :type:`RuntimeFlag`.
+  result.name = opt.name
+  if opt.abbr.len > 0:
+    result.short = opt.abbr[0]
+  result.description = opt.desc
+  result.typeHint = opt.typename
+  result.required = not opt.hasDefault
+  result.default = opt.defaultInHelpText
+
+func cmdInfoToRuntimeCommand(cmd: CmdInfo): RuntimeCommand =
+  ## Translate an :type:`CmdInfo` (including its options and recursive
+  ## sub-command discriminator) into a :type:`RuntimeCommand`.
+  result.name = cmd.name
+  result.description = cmd.desc
+  for opt in cmd.opts:
+    case opt.kind
+    of CliSwitch:
+      if not opt.isHidden:
+        result.flags.add cmdInfoToRuntimeFlag(opt)
+    of Discriminator:
+      if opt.isCommand:
+        for sub in opt.subCmds:
+          result.subcommands.add cmdInfoToRuntimeCommand(sub)
+    else:
+      discard
+
+func cmdInfoToRuntimeSurface(
+    cmd: CmdInfo, programName: string): RuntimeCommandSurface =
+  ## Translate the top-level :type:`CmdInfo` into a full surface. CLI
+  ## switches at the root become global flags; sub-commands of any
+  ## ``{.command.}`` discriminator become top-level commands.
+  result.programName = programName
+  for opt in cmd.opts:
+    case opt.kind
+    of CliSwitch:
+      if not opt.isHidden:
+        result.globalFlags.add cmdInfoToRuntimeFlag(opt)
+    of Discriminator:
+      if opt.isCommand:
+        for sub in opt.subCmds:
+          result.commands.add cmdInfoToRuntimeCommand(sub)
+    else:
+      discard
+
+macro surfaceFromType*(
+    T: typedesc; programName: static string = ""): RuntimeCommandSurface =
+  ## Compile-time bridge: introspect a Nim object type used as a confutils
+  ## configuration and emit a :type:`RuntimeCommandSurface` literal at
+  ## compile time. The bridge is transparent: existing confutils users see
+  ## no behavioural change, but help formatting, completion generation and
+  ## merging can now run over the resulting runtime surface.
+  let
+    typeSym = T.getType[1]
+    cmdInfo = cmdInfoFromType typeSym
+    surface = cmdInfoToRuntimeSurface(cmdInfo, programName)
+  result = newLitFixed surface
 
 proc addConfigFile*(secondarySources: auto,
                     Format: type,
