@@ -516,6 +516,27 @@ test suite successfully.
 
 [BOUNTIES]: https://github.com/status-im/nim-confutils/issues?q=is%3Aissue+is%3Aopen+label%3Abounty
 
+## Known limitations
+
+[`docs/Limitations.md`](docs/Limitations.md) catalogues the confutils
+behaviours that downstream code currently has to work around — what each one
+does, what it should do, what it costs, and where a fix would go. Each entry is
+graded by severity, with *silently wrong* (the command line is accepted and
+means something other than what was written) called out separately from
+*loudly unsupported*.
+
+Every entry has a matching test in `tests/test_known_limitations.nim` that
+asserts the **correct** behaviour, so the whole suite is expected to be **red**:
+
+```
+nimble limitations
+```
+
+It is deliberately excluded from `tests/test_all.nim` and from `nimble test`,
+so the ordinary suite and CI stay green. Do not "fix" a failure there by
+weakening the assertion — a test that encodes a defect turns the defect into a
+specification. Read `docs/Limitations.md` before adding to it.
+
 ## License
 
 Licensed and distributed under either of

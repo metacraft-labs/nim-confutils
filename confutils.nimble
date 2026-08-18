@@ -46,3 +46,21 @@ task test, "Run all tests":
     else:
       echo "  [FAILED] ", path.split(DirSep)[^1]
       quit(QuitFailure)
+
+task limitations, "Run the EXPECTED-RED known-limitations suite (docs/Limitations.md)":
+  # `tests/test_known_limitations.nim` asserts the behaviour confutils SHOULD
+  # have, so every test in it fails today and this task exits non-zero by
+  # design. That is why it is not part of `test` above and why the file is not
+  # imported by `tests/test_all.nim`: the ordinary suite must stay green.
+  #
+  # A GREEN run means a limitation was fixed (or a test drifted). Either way,
+  # update docs/Limitations.md in the same change and move the test into the
+  # ordinary suite -- do NOT relax an assertion to match today's behaviour.
+  #
+  # `-d:nimOldCaseObjects` is itself limitation L7: without it a configuration
+  # with a `{.command.}` discriminator aborts at runtime. The suite carries it
+  # so the other eight limitations can be reached, and compiles a fixture
+  # *without* it to demonstrate L7.
+  echo "\r\nEXPECTED-RED: every test below asserts behaviour confutils does " &
+       "not have yet.\r\nSee docs/Limitations.md.\r\n"
+  build " --threads:off -d:nimOldCaseObjects -r", "tests/test_known_limitations"
