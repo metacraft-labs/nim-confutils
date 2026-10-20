@@ -131,6 +131,63 @@ func renderFlagsSection*(flags: seq[RuntimeFlag], heading: string): string =
     result.add renderFlagLine(f, namesWidth)
     result.add "\n"
 
+func optionSwitchColumn*(flag: RuntimeFlag): string =
+  ## The switch column of :proc:`renderOptionsTable`: every spelling of the
+  ## flag followed by its value placeholder, e.g. ``-o, --output <path>``,
+  ## ``--cooperative, --coop`` or ``--trace[=<mode>]`` (an optional value).
+  var spellings: seq[string]
+  if flag.short != '\0': spellings.add "-" & flag.short
+  if flag.name.len > 0: spellings.add "--" & flag.name
+  for alias in flag.aliases: spellings.add "--" & alias
+  result = spellings.join(", ")
+  if flag.takesValue:
+    let placeholder = "<" & (if flag.valueName.len > 0: flag.valueName
+                             else: "value") & ">"
+    if flag.valueOptional: result.add "[=" & placeholder & "]"
+    else: result.add " " & placeholder
+
+func wrapInto(dest: var string, text: string, indent, width: int) =
+  ## Append `text` word-wrapped to `width` columns, every line indented by
+  ## `indent` spaces.  Words longer than the line are kept whole.
+  var line = ""
+  for word in text.splitWhitespace():
+    if line.len > 0 and indent + line.len + 1 + word.len > width:
+      dest.add spaces(indent) & line & "\n"
+      line = ""
+    if line.len > 0: line.add ' '
+    line.add word
+  if line.len > 0:
+    dest.add spaces(indent) & line & "\n"
+
+func renderOptionsTable*(flags: seq[RuntimeFlag], indent = 2,
+                         column = 30, width = 92): string =
+  ## Render ``flags`` as the classic two-column options table of a
+  ## sub-command's ``--help``: the switch column (:proc:`optionSwitchColumn`)
+  ## starting at ``indent``, and the description starting at ``column``,
+  ## word-wrapped to ``width``.  A switch column too wide for its space puts
+  ## the description on the next line.  The ``longDescription`` follows as
+  ## further paragraphs, one per input line (blank lines are dropped), and a
+  ## non-empty ``default`` closes the description.  Plain text; the order
+  ## of ``flags`` is kept.
+  for flag in flags:
+    let switches = spaces(indent) & optionSwitchColumn(flag)
+    var desc = flag.description
+    if flag.default.len > 0:
+      desc.add " (default: " & flag.default & ")"
+    var body = ""
+    body.wrapInto(desc, column, width)
+    for paragraph in flag.longDescription.splitLines():
+      if paragraph.strip().len > 0:
+        body.wrapInto(paragraph, column, width)
+    if body.len == 0:
+      result.add switches & "\n"
+    elif switches.len + 1 < column:
+      # The first description line goes beside the switches.
+      result.add switches & spaces(column - switches.len) &
+                 body.substr(column)
+    else:
+      result.add switches & "\n" & body
+
 func renderCommand*(cmd: RuntimeCommand, indent = 0): string =
   ## Render a single command (recursively including its subcommands and
   ## flags). ``indent`` is the indentation depth in spaces (used for nested

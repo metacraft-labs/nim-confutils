@@ -18,6 +18,7 @@
 
 import
   test_ignore,
+  test_cli_semantics,
   test_envvar,
   test_parsecmdarg,
   test_pragma,

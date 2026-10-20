@@ -2,7 +2,29 @@ import
   std/options
 
 type
+  ConfigurationErrorKind* = enum
+    ## What went wrong, so that a caller which does not quit on failure
+    ## (`load(..., quitOnFailure = false)`) can word the error itself.
+    cekOther              ## anything not classified below
+    cekUnknownOption      ## a switch that no field declares
+    cekMissingValue       ## a value-taking switch with nothing after it
+    cekInvalidValue       ## `parseCmdArg` rejected the value (`detail` says why)
+    cekUnexpectedArgument ## a positional argument the command does not take
+    cekMissingRequired    ## a required option was not given
+    cekHelpRequested      ## `--help` / `-h` (raised instead of printing help)
+    cekVersionRequested   ## `--version` (raised instead of printing it)
+
   ConfigurationError* = object of CatchableError
+    ## `msg` is always a complete English sentence.  The fields below carry
+    ## the same facts in structured form; they are empty where they do not
+    ## apply (an error raised by a config-file reader is `cekOther`).
+    kind*: ConfigurationErrorKind
+    option*: string     ## the switch as typed (`--name`, `-n`), or the
+                        ## positional argument for `cekUnexpectedArgument`
+    optionName*: string ## the declared long name of the matched option
+    value*: string      ## the value that was rejected (`cekInvalidValue`)
+    detail*: string     ## the underlying message, e.g. `parseCmdArg`'s
+                        ## `ValueError` for `cekInvalidValue`
 
   TypedInputFile*[ContentType = Unspecified,
                   Format = Unspecified,
@@ -57,6 +79,26 @@ template hidden* {.pragma.}
 template ignore* {.pragma.}
 template inlineConfiguration* {.pragma.}
 
+template implicitValue*(v: string) {.pragma.}
+  ## The value an option takes when it is given bare (`--name`), or when the
+  ## token after it is not a valid value of the field's type (or begins with
+  ## `-`).  `--name=value` always applies `value`; `--name value` consumes the
+  ## next token only when `parseCmdArg` accepts it.  This is how an option
+  ## with an OPTIONAL value is declared, e.g. `--trace[=auto|off]`.
+
+template alsoSets*(field: string, value: string) {.pragma.}
+  ## When this option is given, `value` is ALSO applied to the field named
+  ## `field` (its Nim identifier), at the same position in the command line,
+  ## through that field's own setter.  A `seq` field therefore accumulates
+  ## it in command-line order with the field's own option, and a scalar field
+  ## takes whichever of the two spellings came last.  For a `bool` option the
+  ## value is applied only when the option is set to true.  The target may be
+  ## an `{.ignore.}` field, which then records the fact without being an
+  ## option of its own.
+
+template valueName*(v: string) {.pragma.}
+  ## The placeholder shown for the option's value in help (`--output <path>`).
+
 template implicitlySelectable* {.pragma.}
   ## This can be applied to a case object discriminator
   ## to allow the value of the discriminator to be determined
@@ -91,6 +133,13 @@ type
     required*: bool      ## whether the flag is required.
     default*: string     ## rendered default value as displayed in help;
                          ##   empty string means "no default to display".
+    longDescription*: string ## the ``longDesc`` pragma: further paragraphs,
+                         ##   one per line, rendered under ``description``.
+    aliases*: seq[string]## further long spellings (a multi-character
+                         ##   ``abbr``), without the leading "--".
+    takesValue*: bool    ## false for a switch (a ``bool`` field).
+    valueOptional*: bool ## the value may be omitted (``implicitValue``).
+    valueName*: string   ## the ``valueName`` pragma: the value placeholder.
 
   RuntimeCommand* = object
     ## A command (or sub-command) described as plain data.

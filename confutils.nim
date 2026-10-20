@@ -1,9 +1,16 @@
 import
   os,
   std/[enumutils, options, strutils, wordwrap, strformat, sequtils],
-  stew/shims/macros,
   serialization,
   confutils/[defs, cli_parser, config_file, runtime_surface]
+import stew/shims/macros except readPragma
+
+# `stew` deprecated `readPragma` in 0.6.4 and removed it after that.  This is
+# the same lookup, kept here so that confutils builds against both: it returns
+# the pragma's single argument, the whole pragma node otherwise, or nil.
+template readPragma(field: FieldDescription, pragmaName: static string): NimNode =
+  let p = findPragma(field.pragmas, bindSym(pragmaName))
+  if p != nil and p.len == 2: p[1] else: p
 
 export
   options, serialization, defs, config_file, runtime_surface
@@ -50,6 +57,11 @@ type
     isHidden: bool
     hasDefault: bool
     defaultInHelpText: string
+    hasImplicitValue: bool    # `{.implicitValue.}`: the value may be omitted
+    implicitValue: string
+    alsoSetsIdx: int          # `{.alsoSets.}` target field index, or -1
+    alsoSetsValue: string
+    valueName: string         # `{.valueName.}`: the help placeholder
     case kind: OptKind
     of Discriminator:
       isCommand: bool
@@ -328,7 +340,10 @@ proc describeOptions(help: var string,
       helpOutput " "
 
       if opt.abbr.len > 0:
-        helpOutput fgOption, styleBright, "-", opt.abbr, ", "
+        # A multi-character abbreviation is matched as a LONG switch
+        # (`findOpt` compares it with the key of `--abbr`), so show it so.
+        let abbrDashes = if opt.abbr.len > 1: "--" else: "-"
+        helpOutput fgOption, styleBright, abbrDashes, opt.abbr, ", "
       elif appInfo.hasAbbrs:
         # Add additional indentatition, so all names are aligned
         helpOutput "    "
@@ -426,9 +441,13 @@ proc noMoreArgsError(cmd: CmdInfo): string {.raises: [].} =
     result = appInvocation() & " has no such subcommand"
   
 func findOpt(opts: openArray[OptInfo], name: string): OptInfo =
+  # An empty key (a lone `-`, or `--=value`) names no option.  Compared
+  # unguarded, it equalled the empty `abbr` of every option declared without
+  # one, so `-` was read as the first such option.
+  if name.len == 0: return nil
   for opt in opts:
     if cmpIgnoreStyle(opt.name, name) == 0 or
-       cmpIgnoreStyle(opt.abbr, name) == 0:
+       (opt.abbr.len > 0 and cmpIgnoreStyle(opt.abbr, name) == 0):
       return opt
 
 # returns the rest of args option if present.
@@ -767,6 +786,29 @@ func toText(n: NimNode): string =
   elif n.kind in {nnkStrLit..nnkTripleStrLit}: n.strVal
   else: repr(n)
 
+proc pragmaText(n: NimNode, pragmaName: string): string =
+  ## The string a text pragma (`desc`, `longDesc`, ...) carries.  Besides a
+  ## literal, accept a NAMED string constant: an expression (`"a" & B`) is
+  ## folded to a literal by the compiler, but a bare constant reaches the
+  ## macro as a symbol, and `strVal` of a symbol is its NAME -- which used to
+  ## turn `{.desc: SomeConst.}` silently into the help text "SomeConst".
+  case n.kind
+  of nnkStrLit..nnkTripleStrLit:
+    n.strVal
+  of nnkSym:
+    if n.symKind == nskConst:
+      let impl = n.getImpl
+      if impl.kind == nnkConstDef and
+         impl[^1].kind in {nnkStrLit..nnkTripleStrLit}:
+        return impl[^1].strVal
+    error "the {." & pragmaName & ".} pragma needs a string literal or a " &
+          "string constant", n
+    ""
+  else:
+    error "the {." & pragmaName & ".} pragma needs a string literal or a " &
+          "string constant", n
+    ""
+
 proc cmdInfoFromType(T: NimNode): CmdInfo =
   result = CmdInfo()
 
@@ -774,6 +816,10 @@ proc cmdInfoFromType(T: NimNode): CmdInfo =
     recordDef = getImpl(T)
     discriminatorFields = newSeq[OptInfo]()
     fieldIdx = 0
+    fieldIdxByName: seq[string]   # Nim field name at each setter index
+
+  for field in recordFields(recordDef):
+    fieldIdxByName.add $field.name
 
   for field in recordFields(recordDef):
     let
@@ -803,11 +849,33 @@ proc cmdInfoFromType(T: NimNode): CmdInfo =
                       defaultInHelpText: defaultInHelpText,
                       typename: field.typ.repr)
 
-    if desc != nil: opt.desc = desc.strVal
-    if name != nil: opt.name = name.strVal
-    if abbr != nil: opt.abbr = abbr.strVal
-    if separator != nil: opt.separator = separator.strVal
-    if longDesc != nil: opt.longDesc = longDesc.strVal
+    if desc != nil: opt.desc = pragmaText(desc, "desc")
+    if name != nil: opt.name = pragmaText(name, "name")
+    if abbr != nil: opt.abbr = pragmaText(abbr, "abbr")
+    if separator != nil: opt.separator = pragmaText(separator, "separator")
+    if longDesc != nil: opt.longDesc = pragmaText(longDesc, "longDesc")
+
+    let
+      implicitVal = field.readPragma"implicitValue"
+      alsoSets = field.readPragma"alsoSets"
+      valueName = field.readPragma"valueName"
+    if implicitVal != nil:
+      opt.hasImplicitValue = true
+      opt.implicitValue = pragmaText(implicitVal, "implicitValue")
+    if valueName != nil:
+      opt.valueName = pragmaText(valueName, "valueName")
+    opt.alsoSetsIdx = -1
+    if alsoSets != nil:
+      if alsoSets.kind notin {nnkCall, nnkCallStrLit} or alsoSets.len != 3:
+        error "{.alsoSets.} takes two arguments: a field name and a value",
+              alsoSets
+      let target = pragmaText(alsoSets[1], "alsoSets")
+      opt.alsoSetsValue = pragmaText(alsoSets[2], "alsoSets")
+      opt.alsoSetsIdx = fieldIdxByName.find(target)
+      if opt.alsoSetsIdx < 0:
+        error "{.alsoSets.} names no field of this type: " & target, alsoSets
+      if opt.alsoSetsIdx == fieldIdx:
+        error "{.alsoSets.} cannot name the option's own field", alsoSets
 
     inc fieldIdx
 
@@ -905,12 +973,21 @@ func cmdInfoToRuntimeFlag(opt: OptInfo): RuntimeFlag =
   ## Translate an :type:`OptInfo` CLI-switch entry into a plain
   ## :type:`RuntimeFlag`.
   result.name = opt.name
-  if opt.abbr.len > 0:
+  if opt.abbr.len == 1:
     result.short = opt.abbr[0]
+  elif opt.abbr.len > 1:
+    # A multi-character abbreviation is a second LONG spelling (`findOpt`
+    # matches it against the key of `--abbr`); truncating it to its first
+    # character would advertise a switch the parser does not accept.
+    result.aliases.add opt.abbr
   result.description = opt.desc
+  result.longDescription = opt.longDesc
   result.typeHint = opt.typename
   result.required = not opt.hasDefault
   result.default = opt.defaultInHelpText
+  result.takesValue = opt.typename != "bool"
+  result.valueOptional = opt.hasImplicitValue
+  result.valueName = opt.valueName
 
 func cmdInfoToRuntimeCommand(cmd: CmdInfo): RuntimeCommand =
   ## Translate an :type:`CmdInfo` (including its options and recursive
@@ -991,6 +1068,26 @@ func constructEnvKey*(prefix: string, key: string): string {.raises: [].} =
   except ValueError as err:
     raiseAssert "strformat.`&` failed: " & err.msg
 
+proc newConfigurationError(kind: ConfigurationErrorKind,
+                           msg, option, optionName, value,
+                           detail: string): ref ConfigurationError =
+  result = newException(ConfigurationError, msg)
+  result.kind = kind
+  result.option = option
+  result.optionName = optionName
+  result.value = value
+  result.detail = detail
+
+func isTruthy(value: string): bool =
+  ## How a switch (`bool` field) reads its value: bare is true.
+  value.len == 0 or (try: parseBool(value) except ValueError: false)
+
+func isExplicitFalse(value: string): bool =
+  ## A switch value that `parseBool` reads as false (`false`, `off`, `no`,
+  ## `0`, ...).  A value it cannot read is not one: that is left to the
+  ## field's setter, which rejects it as an invalid value.
+  value.len > 0 and (try: not parseBool(value) except ValueError: false)
+
 proc loadImpl[C, SecondarySources](
     Configuration: typedesc[C],
     cmdLine = commandLineParams(),
@@ -1002,7 +1099,8 @@ proc loadImpl[C, SecondarySources](
     secondarySources: proc (
         config: Configuration, sources: ref SecondarySources
     ) {.gcsafe, raises: [ConfigurationError].} = nil,
-    envVarsPrefix = getAppFilename()
+    envVarsPrefix = getAppFilename(),
+    negatableSwitches = true
 ): Configuration {.raises: [ConfigurationError].} =
   ## Loads a program configuration by parsing command-line arguments
   ## and a standard set of config files that can specify:
@@ -1031,18 +1129,29 @@ proc loadImpl[C, SecondarySources](
     errorOutput " for more information.\p"
     flushOutputAndQuit QuitFailure
 
-  template fail(args: varargs[untyped]) =
+  template fail(errKind: ConfigurationErrorKind,
+                errOption, errOptionName, errValue, errDetail, errMsg: string,
+                styled: varargs[untyped]) =
+    ## Report a command-line error.  When quitting on failure, `styled` is
+    ## printed (with colours) and the process exits; otherwise the error is
+    ## RAISED, carrying `errMsg` and the structured fields, so that a library
+    ## caller can return it -- an empty message here used to leave such a
+    ## caller with nothing to tell its user.
     if quitOnFailure:
-      errorOutput args
+      errorOutput styled
       errorOutput "\p"
       suggestCallingHelp()
     else:
-      # TODO: populate this string
-      raise newException(ConfigurationError, "")
+      raise newConfigurationError(errKind, errMsg, errOption, errOptionName,
+                                  errValue, errDetail)
+
+  template fail(errKind: ConfigurationErrorKind, errMsg: string) =
+    fail(errKind, "", "", "", "", errMsg, errMsg)
 
   let confAddr = addr result
 
-  template applySetter(setterIdx: int, cmdLineVal: string) =
+  template applySetter(setterIdx: int, cmdLineVal: string,
+                       switchText = "") =
     # echo "applySetter ", setterIdx, " ", cmdLineVal
     when defined(nimHasWarnBareExcept):
       {.push warning[BareExcept]:off.}
@@ -1052,13 +1161,39 @@ proc loadImpl[C, SecondarySources](
       fieldSetters[setterIdx][1](confAddr[], some(cmdLineVal))
       inc fieldCounters[setterIdx]
     except:
-      fail("Error while processing the ",
-           fgOption, fieldSetters[setterIdx][0],
+      let
+        setterName = fieldSetters[setterIdx][0]
+        detail = getCurrentExceptionMsg()
+      fail(cekInvalidValue,
+           (if switchText.len > 0: switchText else: setterName),
+           setterName, cmdLineVal, detail,
+           "Error while processing the " & setterName & "=" & cmdLineVal &
+             " parameter: " & detail,
+           "Error while processing the ",
+           fgOption, setterName,
            "=", cmdLineVal, resetStyle, " parameter: ",
-           getCurrentExceptionMsg())
+           detail)
 
     when defined(nimHasWarnBareExcept):
       {.pop.}
+
+  template applyOption(opt: OptInfo, cmdLineVal: string, switchText: string) =
+    ## Apply a value given on the command line to `opt`'s field, then to its
+    ## `{.alsoSets.}` target (for a switch, only when it is set to true).
+    applySetter(opt.idx, cmdLineVal, switchText)
+    if opt.alsoSetsIdx >= 0 and
+       (opt.typename != "bool" or isTruthy(cmdLineVal)):
+      applySetter(opt.alsoSetsIdx, opt.alsoSetsValue, switchText)
+
+  proc acceptsValue(setterIdx: int, value: string): bool =
+    ## Whether the field's setter accepts `value`, decided on a scratch copy
+    ## so that a rejected probe changes nothing.
+    var probe = confAddr[]
+    try:
+      fieldSetters[setterIdx][1](probe, some(value))
+      true
+    except CatchableError:
+      false
 
   when hasCompletions:
     template getArgCompletions(opt: OptInfo, prefix: string): seq[string] =
@@ -1110,7 +1245,13 @@ proc loadImpl[C, SecondarySources](
           except IOError:
             discard
 
-    let completion = splitCompletionLine()
+    # Shell completion is the PROGRAM's job: it answers `COMP_LINE` on stdout
+    # and returns an unparsed, default configuration.  A library caller (one
+    # that does not quit on failure) parses a command line it was handed, so a
+    # `COMP_LINE` that happens to be in its environment must not turn the parse
+    # into a silent no-op that drops every option.
+    let completion =
+      if quitOnFailure: splitCompletionLine() else: newSeq[string]()
     # If we're not asked to complete a command line the result is an empty list
     if len(completion) != 0:
       var cmdStack = @[rootCmd]
@@ -1180,19 +1321,46 @@ proc loadImpl[C, SecondarySources](
       copyrightBanner: copyrightBanner,
       appInvocation: appInvocation())
 
-  template processHelpAndVersionOptions(optKey: string) =
+  proc helpOwnsShortH(): bool =
+    ## `-h` asks for help unless an option of the active commands claims the
+    ## abbreviation `h` for something else.  (An option NAMED `help` with
+    ## `abbr: "h"` only documents the switch, so it does not count.)
+    let claimed = findOpt(activeCmds, "h")
+    claimed == nil or cmpIgnoreStyle(claimed.name, "help") == 0
+
+  template processHelpAndVersionOptions(optKey: string, switchText: string,
+                                        isSwitch: bool) =
     let key = optKey
-    if cmpIgnoreStyle(key, "help") == 0:
-      help.showHelp lazyHelpAppInfo(), activeCmds
+    # `-h` (and `--h`, which `findOpt` would otherwise match against an `h`
+    # abbreviation) asks for help unless an option claims `h`.
+    if cmpIgnoreStyle(key, "help") == 0 or
+       (isSwitch and key == "h" and helpOwnsShortH()):
+      if quitOnFailure:
+        help.showHelp lazyHelpAppInfo(), activeCmds
+      else:
+        # A library caller renders help itself; showing it here would also
+        # QUIT the caller's process.
+        raise newConfigurationError(cekHelpRequested, "help was requested",
+                                    switchText, "help", "", "")
     elif version.len > 0 and cmpIgnoreStyle(key, "version") == 0:
-      help.helpOutput version, "\p"
-      flushOutputAndQuit QuitSuccess
+      if quitOnFailure:
+        help.helpOutput version, "\p"
+        flushOutputAndQuit QuitSuccess
+      else:
+        raise newConfigurationError(cekVersionRequested,
+                                    "version was requested", switchText,
+                                    "version", "", "")
 
   var index = 0
-  var pendingOpt: OptInfo = nil  # Non-nil when the previous option needs its value from the next token
-  for kind, key, val in getopt(cmdLine, shortNoVal = {}, longNoVal = @[]):
-    when key isnot string:
-      let key = string(key)
+  var parser = initOptParser(cmdLine)
+  while true:
+    next(parser)
+    if parser.kind == cmdEnd: break
+    let
+      kind = parser.kind
+      key = parser.key
+      val = parser.val
+      valGiven = parser.valGiven
 
     # echo "active len:", activeCmds.len, " key:", key, " hasRestOfArgs:", lastCmd.hasRestOfArgs, " #", index, " lastCmd opts len:", lastCmd.opts.len
 
@@ -1211,7 +1379,8 @@ proc loadImpl[C, SecondarySources](
       # if lastCmd.hasRestOfArgs:
       #   applySetter(lastCmd.opts[^1].idx, paramStr(index))
       #   continue
-      processHelpAndVersionOptions key
+      let switchText = (if kind == cmdLongOption: "--" else: "-") & key
+      processHelpAndVersionOptions key, switchText, true
 
       # echo "processing cli switch ", key, " with val ", val
       var opt = findOpt(activeCmds, key)
@@ -1228,29 +1397,60 @@ proc loadImpl[C, SecondarySources](
           else:
             discard
 
-      if opt != nil:
-        if val.len > 0 or opt.typename == "bool":
-          applySetter(opt.idx, val)
-        else:
-          # The option was provided without '=' (e.g. --output-folder /tmp/dir
-          # or -o /tmp/dir).  Nim's parseopt treats the value as a separate
-          # cmdArgument token. Mark this option as pending so the next
-          # cmdArgument iteration consumes it as the value.
-          pendingOpt = opt
+      if opt == nil:
+        # `value` carries an in-token value (`--name=value`), so a caller can
+        # echo the whole token back.
+        fail(cekUnknownOption, switchText, "", (if valGiven: val else: ""), "",
+             "Unrecognized option '" & key & "'",
+             "Unrecognized option '" & key & "'")
+      elif opt.typename == "bool" or valGiven:
+        # A switch takes no value from the next token (`--flag=false` still
+        # works, unless `negatableSwitches` is off), and `--name=value`
+        # carries its own.
+        if opt.typename == "bool" and valGiven and not negatableSwitches and
+           isExplicitFalse(val):
+          let detail = switchText & " is a switch: it is on when given and " &
+                       "off when omitted, so it takes no false value (got '" &
+                       switchText & "=" & val & "')"
+          fail(cekInvalidValue, switchText, opt.name, val, detail, detail,
+               detail)
+        applyOption(opt, val, switchText)
       else:
-        fail "Unrecognized option '$1'" % [key]
+        # `--name value` / `-n value`: the value is the next token.
+        var tok: string
+        let inCluster = parser.nextTokenIsInCluster
+        if opt.hasImplicitValue:
+          # OPTIONAL value: take the next token only when it is a value this
+          # option accepts, so that a bare `--name` stays usable right before
+          # another option or a positional argument.
+          if parser.peekValueToken(tok) and not inCluster and
+             (tok.len == 0 or tok[0] != '-') and acceptsValue(opt.idx, tok):
+            discard parser.takeValueToken(tok)
+            index += 1
+            applyOption(opt, tok, switchText)
+          else:
+            applyOption(opt, opt.implicitValue, switchText)
+        elif parser.takeValueToken(tok):
+          # The next token is the value VERBATIM, even when it begins with
+          # `-`: the option asked for a value, and a value such as `-` (stdin)
+          # or `-5` is legitimate.  This used to be a "pending" option that
+          # only a following positional token completed, so a value-taking
+          # option followed by another option, or last on the command line,
+          # was silently dropped.
+          if not inCluster: index += 1
+          applyOption(opt, tok, switchText)
+        else:
+          let shown = if opt.valueName.len > 0: " <" & opt.valueName & ">"
+                      else: ""
+          fail(cekMissingValue, switchText, opt.name, "", "",
+               "The option '" & switchText & "' requires a value" & shown,
+               "The option '", fgOption, switchText, resetStyle,
+               "' requires a value", shown)
 
     of cmdArgument:
-      # If the previous option was provided without '=' (e.g. -o /tmp/dir),
-      # this argument is the option's value, not a positional argument.
-      if pendingOpt != nil:
-        applySetter(pendingOpt.idx, key)
-        pendingOpt = nil
-        continue
-
       # echo "process cmd option ", key
       if lastCmd.hasSubCommands:
-        processHelpAndVersionOptions key
+        processHelpAndVersionOptions key, key, false
 
       block processArg:
         let subCmdDiscriminator = lastCmd.getSubCmdDiscriminator
@@ -1262,7 +1462,8 @@ proc loadImpl[C, SecondarySources](
             break processArg
 
         if nextArgIdx == -1:
-          fail lastCmd.noMoreArgsError
+          let msg = lastCmd.noMoreArgsError
+          fail(cekUnexpectedArgument, key, "", key, "", msg, msg)
 
         applySetter(nextArgIdx, key)
 
@@ -1283,18 +1484,24 @@ proc loadImpl[C, SecondarySources](
     try:
       secondarySources(result, secondarySourcesRef)
     except ConfigurationError as err:
-      fail "Failed to load secondary sources: '$1'" % [err.msg]
+      fail(cekOther, "Failed to load secondary sources: '" & err.msg & "'")
 
   proc processMissingOpts(
       conf: var Configuration, cmd: CmdInfo) {.raises: [ConfigurationError].} =
     for opt in cmd.opts:
       if fieldCounters[opt.idx] == 0:
-        let envKey = constructEnvKey(envVarsPrefix, opt.name)
+        # An EMPTY prefix turns the environment off: otherwise every option
+        # not given on the command line is looked up as `_<NAME>`, and a
+        # program that reads its environment explicitly (or whose options'
+        # names collide with another tool's variables) cannot opt out.
+        let envKey =
+          if envVarsPrefix.len > 0: constructEnvKey(envVarsPrefix, opt.name)
+          else: ""
 
         try:
-          if existsEnv(envKey):
+          if envKey.len > 0 and existsEnv(envKey):
             let envContent = getEnv(envKey)
-            applySetter(opt.idx, envContent)
+            applySetter(opt.idx, envContent, envKey)
           elif secondarySourcesRef.setters[opt.idx](conf, secondarySourcesRef):
             # all work is done in the config file setter,
             # there is nothing left to do here.
@@ -1302,9 +1509,13 @@ proc loadImpl[C, SecondarySources](
           elif opt.hasDefault:
             fieldSetters[opt.idx][1](conf, none[string]())
           elif opt.required:
-            fail "The required option '$1' was not specified" % [opt.name]
+            let msg = "The required option '" & opt.name & "' was not specified"
+            fail(cekMissingRequired, "--" & opt.name, opt.name, "", "", msg,
+                 msg)
         except ValueError as err:
-          fail "Option '$1' failed to parse: '$2'" % [opt.name, err.msg]
+          let msg = "Option '" & opt.name & "' failed to parse: '" & err.msg & "'"
+          fail(cekInvalidValue, "--" & opt.name, opt.name, "", err.msg, msg,
+               msg)
 
   for cmd in activeCmds:
     result.processMissingOpts(cmd)
@@ -1317,13 +1528,21 @@ template load*(
     printUsage = true,
     quitOnFailure = true,
     secondarySources: untyped = nil,
-    envVarsPrefix = getAppFilename()): untyped =
+    envVarsPrefix = getAppFilename(),
+    negatableSwitches = true): untyped =
+  ## `negatableSwitches = false` refuses a switch (a `bool` field) given an
+  ## explicit false value (`--flag=false`, `--flag=off`) instead of applying
+  ## it.  A switch is on when given and off when omitted, so for a program
+  ## whose switches cannot be turned off again (because a default or another
+  ## option decides the setting) a negated spelling would be accepted and do
+  ## nothing -- that program passes `false`.
 
   block:
     var secondarySourcesRef = generateSecondarySources(Configuration)
     loadImpl(Configuration, cmdLine, version,
              copyrightBanner, printUsage, quitOnFailure,
-             secondarySourcesRef, secondarySources, envVarsPrefix)
+             secondarySourcesRef, secondarySources, envVarsPrefix,
+             negatableSwitches)
 
 func defaults*(Configuration: type): Configuration =
   load(Configuration, cmdLine = @[], printUsage = false, quitOnFailure = false)
