@@ -440,14 +440,37 @@ proc noMoreArgsError(cmd: CmdInfo): string {.raises: [].} =
   if not cmd.hasAnyArgs and not cmd.isSubCommand:
     result = appInvocation() & " has no such subcommand"
   
+func isSwitch(opt: OptInfo): bool =
+  ## Whether `opt` is a switch: on when given, off when omitted, and never
+  ## given its value by the next token (`--flag=false` still sets one).  A
+  ## `bool` field is one, and so is an `Option[bool]` field, whose only
+  ## difference is that "not given" stays observable as `none`.  Treating
+  ## `Option[bool]` as value-taking made `--flag <positional>` spend the
+  ## positional argument as the switch's value.
+  ##
+  ## `typename` is the field type's `repr`, so the qualified spellings are
+  ## accepted too.
+  let t = opt.typename.multiReplace((" ", ""))
+  t in ["bool", "system.bool", "Option[bool]", "options.Option[bool]",
+        "Option[system.bool]", "options.Option[system.bool]"]
+
+func matchesKey(spelling, key: string): bool =
+  ## Whether a declared name or abbreviation `spelling` matches the key the
+  ## user typed.  A single-character spelling is a SHORT switch and matches
+  ## case-sensitively, so `-f` and `-F` can name different options (as they
+  ## do in `tail`, `grep` and `ls`).  Longer spellings keep confutils' style-
+  ## insensitive matching (`--output-dir` = `--Output-Dir` = `--OUTPUT-DIR`).
+  if spelling.len == 0 or key.len == 0: return false
+  if spelling.len == 1 or key.len == 1: spelling == key
+  else: cmpIgnoreStyle(spelling, key) == 0
+
 func findOpt(opts: openArray[OptInfo], name: string): OptInfo =
   # An empty key (a lone `-`, or `--=value`) names no option.  Compared
   # unguarded, it equalled the empty `abbr` of every option declared without
   # one, so `-` was read as the first such option.
   if name.len == 0: return nil
   for opt in opts:
-    if cmpIgnoreStyle(opt.name, name) == 0 or
-       (opt.abbr.len > 0 and cmpIgnoreStyle(opt.abbr, name) == 0):
+    if matchesKey(opt.name, name) or matchesKey(opt.abbr, name):
       return opt
 
 # returns the rest of args option if present.
@@ -985,7 +1008,7 @@ func cmdInfoToRuntimeFlag(opt: OptInfo): RuntimeFlag =
   result.typeHint = opt.typename
   result.required = not opt.hasDefault
   result.default = opt.defaultInHelpText
-  result.takesValue = opt.typename != "bool"
+  result.takesValue = not opt.isSwitch
   result.valueOptional = opt.hasImplicitValue
   result.valueName = opt.valueName
 
@@ -1182,7 +1205,7 @@ proc loadImpl[C, SecondarySources](
     ## `{.alsoSets.}` target (for a switch, only when it is set to true).
     applySetter(opt.idx, cmdLineVal, switchText)
     if opt.alsoSetsIdx >= 0 and
-       (opt.typename != "bool" or isTruthy(cmdLineVal)):
+       (not opt.isSwitch or isTruthy(cmdLineVal)):
       applySetter(opt.alsoSetsIdx, opt.alsoSetsValue, switchText)
 
   proc acceptsValue(setterIdx: int, value: string): bool =
@@ -1232,7 +1255,7 @@ proc loadImpl[C, SecondarySources](
 
       for opt in matchingOptions:
         # The trailing '=' means the switch accepts an argument
-        let trailing = if opt.typename != "bool": "=" else: ""
+        let trailing = if not opt.isSwitch: "=" else: ""
 
         if argName in filterKind and len(opt.name) > 0:
           try:
@@ -1403,11 +1426,11 @@ proc loadImpl[C, SecondarySources](
         fail(cekUnknownOption, switchText, "", (if valGiven: val else: ""), "",
              "Unrecognized option '" & key & "'",
              "Unrecognized option '" & key & "'")
-      elif opt.typename == "bool" or valGiven:
+      elif opt.isSwitch or valGiven:
         # A switch takes no value from the next token (`--flag=false` still
         # works, unless `negatableSwitches` is off), and `--name=value`
         # carries its own.
-        if opt.typename == "bool" and valGiven and not negatableSwitches and
+        if opt.isSwitch and valGiven and not negatableSwitches and
            isExplicitFalse(val):
           let detail = switchText & " is a switch: it is on when given and " &
                        "off when omitted, so it takes no false value (got '" &

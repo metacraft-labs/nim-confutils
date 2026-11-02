@@ -368,10 +368,14 @@ A prefix of `--` is used to indicate a long option name, while the `-` prefix
 uses the short option name. Multiple short options such as `-a`, `-b` and
 `-c` can be combined into a single `-abc` string. Both the long and the short
 forms can also be prefixed with `/` in the style of Windows utilities. The
-option names are matched in case-insensitive fashion and certain characters
-such as `_` and `-` will be ignored. The values can be separated from the
-option names with a space, colon or an equal sign. `bool` flags default to
-`false` and merely including them in the command line sets them to `true`.
+long option names are matched in case-insensitive fashion and certain characters
+such as `_` will be ignored. A single-character (short) name is matched
+case-sensitively, so `-f` and `-F` can be two different options. The values
+can be separated from the option names with a space, colon or an equal sign.
+`bool` and `Option[bool]` flags are switches: merely including them in the
+command line sets them to `true`, they never take their value from the next
+argument, and `--flag=false` sets one explicitly. A `bool` flag defaults to
+`false`; an `Option[bool]` one stays `none` when it is not given.
 
 Other provided choices are `UnixCmdParser`, `WindowsCmdParser` and `NimCmdParser`
 which are based on more strict grammars following the most established

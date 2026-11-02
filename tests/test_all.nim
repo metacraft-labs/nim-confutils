@@ -10,6 +10,7 @@
 import
   test_ignore,
   test_cli_semantics,
+  test_switch_semantics,
   test_config_file,
   test_envvar,
   test_parsecmdarg,
