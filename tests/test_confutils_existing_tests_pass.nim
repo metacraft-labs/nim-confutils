@@ -9,10 +9,8 @@
 # them here causes them to be run as part of this binary. If any pre-M6
 # test fails or fails to compile, this verification fails along with it.
 #
-# Test_config_file is intentionally excluded from this aggregate (it
-# requires extra toml/json serialization dependencies that are not
-# present in every dev environment); it is still validated separately
-# by the project's normal CI.
+# Test_config_file is included: its toml/json serialization dependencies
+# are pinned beside the rest of codetracer's stack (tests/config.nims).
 
 {.warning[UnusedImport]: off.}
 
@@ -20,6 +18,7 @@ import
   test_ignore,
   test_cli_semantics,
   test_switch_semantics,
+  test_config_file,
   test_envvar,
   test_parsecmdarg,
   test_pragma,

@@ -1171,6 +1171,10 @@ proc loadImpl[C, SecondarySources](
   template fail(errKind: ConfigurationErrorKind, errMsg: string) =
     fail(errKind, "", "", "", "", errMsg, errMsg)
 
+  # Nim 2.x rejects a `result` that is never assigned when the configuration
+  # has a `{.requiresInit.}` field, such as stew's `ValidIpAddress`; the field
+  # setters below fill it in through `confAddr` instead.
+  result = default(Configuration)
   let confAddr = addr result
 
   template applySetter(setterIdx: int, cmdLineVal: string,
