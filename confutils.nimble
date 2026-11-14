@@ -12,6 +12,16 @@ requires "nim >= 1.6.0",
          "stew",
          "serialization"
 
+# Clispec describes a command line declaratively and generates from it the
+# configuration type, the argv parser, help and completion. Confutils can be
+# instantiated over such a description (`confutils/clispec_config`) and adds
+# configuration-file layers, the environment, merge rules and origins
+# (`confutils/layers`). A program that reads TOML files through
+# `confutils/layers/toml_source` requires `toml_serialization` itself. The
+# pinned nim-cli-spec leaves configuration files to confutils, exports the
+# generator helpers confutils uses and can be required through Nimble.
+requires "https://github.com/metacraft-labs/nim-cli-spec#29792c06ac2ecdea82e10adc78628e832f55d179"
+
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
 let flags = getEnv("NIMFLAGS", "") # Extra flags for the compiler
