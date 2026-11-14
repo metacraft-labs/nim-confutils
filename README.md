@@ -508,6 +508,204 @@ produced by Confutils. Possible values are:
 
   All output will be colorless.
 
+## Command lines described in clispec
+
+Besides a plain configuration type, confutils can be instantiated over a
+command line described in [clispec](https://github.com/metacraft-labs/nim-cli-spec),
+a declarative description language for Nim command lines. Clispec generates
+from the description the configuration type (subcommands are commands with
+their own metadata, not enum values), the argv parser, help and shell
+completion. Confutils adds what lies beyond the command line, reading what
+each parameter declares from the description:
+
+* configuration-file layers, in the order and with the bindingness the
+  program declares, validated against a schema generated from the
+  description;
+* the environment variables a parameter's `env` names;
+* per-parameter merge rules across those sources and the command line;
+* an origin object recording where every value came from and what it
+  overrode.
+
+Parsing the command line, help and completion are delegated to the code
+clispec generates, so a program's command line behaves the same whether it
+reads configuration files or not.
+
+```nim
+import std/[os, tables, tempfiles]
+import confutils/clispec_config, confutils/layers/toml_source
+
+proc strictest(candidates: openArray[CliSourcedValue[int]]): int =
+  for c in candidates:
+    result = max(result, c.value)
+
+cliConfiguration(Tool, "tool"):
+  configSchema "tool.config.v1"
+  convention file = snakeCase
+  flag jobs is int, default = 4, env = ["TOOL_JOBS"]
+  flag searchPaths is seq[string], merge = append, separator = ":",
+    env = ["TOOL_PATH"]
+  flag level is int, merge = strictest
+  flag token is string, sources = {env, file}, env = ["TOOL_TOKEN"]
+
+let dir = createTempDir("tool_", "")
+writeFile(dir / "system.toml", """
+schema = "tool.config.v1"
+jobs = 2
+""")
+writeFile(dir / "user.toml", """
+schema = "tool.config.v1"
+jobs = 6
+level = 3
+search_paths = ["/usr/share/tool"]
+
+[extensions]
+my_editor_settings = { theme = "dark" }
+""")
+
+let sources = CliSources(format: tomlCliFormat(),
+  layers: @[
+    CliLayer(name: "system", path: dir / "system.toml", binding: true),
+    CliLayer(name: "user", path: dir / "user.toml"),
+    CliLayer(name: "project", path: dir / "absent.toml")], # skipped
+  env: {"TOOL_PATH": "/opt/tool", "TOOL_TOKEN": "t0k"}.toTable)
+
+let (conf, origins) = Tool.loadWithOrigins(@["--jobs", "8"], sources)
+assert conf.jobs == 2                     # the system layer enforces it
+assert origins.jobs.kind == cokEnforced
+assert origins.jobs.winner.layer == "system" and origins.jobs.winner.line == 2
+assert origins.jobs.losers[1].fate == cfIgnoredByEnforcement # --jobs 8
+assert conf.searchPaths == @["/usr/share/tool", "/opt/tool"]
+assert conf.level == 3 and conf.token == "t0k"
+echo cliDescribe(origins.jobs)
+removeDir(dir)
+```
+
+`cliConfiguration` takes what clispec's `cliProgram` takes and generates
+everything it does (`Tool`, `Tool.load(argv)`, `Tool.helpText`,
+`Tool.complete`, ...), and also `Tool.load(argv, sources)`,
+`Tool.loadWithOrigins(argv, sources)` and `Tool.configSchema`. A program
+whose clispec model carries an extension generates the same code from its
+own macro with clispec's `cliProgramCode` followed by
+`cliConfigurationCode`.
+
+#### Layers belong to the program
+
+A `CliSources` lists the program's layers, lowest precedence first, each a
+`CliLayer` with a `name` (what origins and errors call it), a `path`,
+`binding` and `required` (a missing file is an error rather than a skipped
+layer). Every value a **binding** layer sets is _enforced_: no other source,
+the environment and the command line included, can override it, and each
+attempt is recorded in the origin as ignored. When two binding layers set the
+same key, the lower one enforces it. An enforced value ignores the merge
+rule: it is not combined, appended or reported as a conflict.
+
+The environment is a table the program passes in (`cliProcessEnv()` returns
+the process's own); nothing reads the process environment behind its back.
+An environment value is text, converted exactly like a command-line value; a
+list parameter's variable is one element, or a delimited list when the
+parameter declares a `separator`. A parameter reads exactly the variables its
+`env` lists; no names are derived.
+
+#### Merge rules
+
+Each source (a layer, the environment, the command line) gives a parameter
+one value: within one source a list collects every occurrence, a counted
+flag adds them up and anything else keeps its last. Across sources:
+
+| `merge`           | Value                                                                                                                         |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `replace`         | the highest source's (a higher source's list, even an empty one, replaces a lower one's)                                      |
+| `append`          | every source's list concatenated, lowest first (a `seq` or counted parameter only)                                            |
+| `errorOnConflict` | as `replace`, but two sources with different values are a `cekConflictingSources` error naming both (values compared as text) |
+| a combine proc    | what the proc returns from every source's value                                                                               |
+
+A combine proc has the signature
+`proc (candidates: openArray[CliSourcedValue[T]]): T`, where `T` is the
+parameter's type: it receives one `CliSourcedValue` per source that supplied
+the parameter, lowest first, each with the converted `value` and its
+`origin` (a `CliSite`). A proc that does not fit is a compile error naming
+the parameter. If it raises, loading fails with `cekConflictingSources`
+carrying its message.
+
+Defaults and `implies` apply only after every source has been merged, so a
+default never stands in for a value a file supplied.
+
+#### Configuration files
+
+A file is read by a format adapter, a `CliConfigFormat` whose `parse` proc
+(`CliConfigParser`) turns the file's text into a flat list of entries, each
+with its key's segments, its value (string, integer, float, bool, date-time
+or array) and its line. `tomlCliFormat()` from `confutils/layers/toml_source`
+reads TOML with
+[nim-toml-serialization](https://github.com/status-im/nim-toml-serialization);
+`confutils/clispec_config` does not import it, so a program without
+configuration files needs no serialization library for it. An adapter for
+another format implements the same proc.
+
+The program's schema is then applied to the entries, for every format alike:
+
+- The file must have a top-level `schema` string equal to the description's
+  `configSchema`. A program without one loads no file.
+- Every other key must be a parameter's configuration key, as the layer's
+  source spells it, except keys under a top-level `extensions` table, which
+  is the escape hatch for data the program does not define and is never
+  read. The description sets each source's naming convention
+  (`convention file = snakeCase`, `convention "project" = kebabCase`) and
+  per-parameter overrides; a layer whose name is a file source the
+  description declares uses that source's spelling; failing that, a layer
+  whose format's name is one (`convention "toml" = ...`) uses that; any
+  other layer uses the `file` source's. A key spelt in another source's
+  convention is an unknown key.
+- A value must have its parameter's type: a string (also for enums, paths
+  and every type written as text), an integer, a float (an integer is
+  accepted too) or a bool, and an array of those for a list parameter. A
+  counted flag takes an integer.
+
+Values are read verbatim: nothing is interpolated or expanded, and a list's
+elements are never split on its `separator`. `Tool.configSchema` is the
+schema as a value, with its keys spelt as the `file` source spells them, and
+`Tool.configSchema("project")` the same for a named source; each key also
+lists its spelling in every file source (`sourceKeys`). `cliConfigSchemaJson`
+renders it as JSON under the schema name `clispec-config-schema/1` (keys are
+only added within that name).
+
+A file that breaks these rules raises a `CliConfigError`, whose `kind` is a
+`CliConfigErrorKind`, each with one wording naming the file, the line and the
+key where there is one:
+
+| Kind                  | Wording                                                                        |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `cfeUnknownKey`       | `/home/u/.config/tool.toml:4: unknown key 'jbos' (layer 'user')`               |
+| `cfeMissingSchema`    | the file has no top-level `schema` string (the wording shows the expected one) |
+| `cfeWrongSchema`      | `...:1: declares schema "tool.config.v2"; expected "tool.config.v1"`           |
+| `cfeWrongType`        | `...:2: key 'jobs' has the string "four"; expected an integer`                 |
+| `cfeSyntax`           | `...:3: is not valid:` followed by the format's own message                    |
+| `cfeUnreadable`       | a required layer's file is missing, or a file cannot be read                   |
+| `cfeNoSchemaDeclared` | the description declares no `configSchema`                                     |
+| `cfeNoFormat`         | layers were given without a format                                             |
+
+#### The origin object
+
+`loadWithOrigins` also returns an object of the same shape as the
+configuration object (`ToolOrigins`, `ToolBuildOrigins`, ..., with the same
+`command` discriminator) holding a `CliOrigin` per field:
+
+- `winner`, a `CliSite`: its `kind` (`cokDefault`, `cokFile` with `path`,
+  `line`, `key` (as the file spelt it), the `layer` name and the
+  `fileSource` whose convention that spelling is, `cokEnv` with the
+  `variable`, `cokCli` with the `argvIndex` and `spelling` clispec's parser
+  recorded, `cokImplied` with `impliedBy`, `cokEnforced` like a file, or
+  `cokUnset`), also readable as `origin.kind`;
+- `values`, the value as written;
+- `losers`, every other value that was considered, in the order the merge
+  considered them (layers lowest first, then the environment, then the
+  command line), each with its `value`, its `site` and its `fate`:
+  `cfOverridden`, `cfCombined` (part of an `append` or combined value) or
+  `cfIgnoredByEnforcement`.
+
+`cliDescribe(origin)` puts it in one line, for a debug report or an
+`--explain` option.
+
 ## Contributing
 
 The development of Confutils is sponsored by [Status.im](https://status.im/)

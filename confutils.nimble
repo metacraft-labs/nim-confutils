@@ -44,6 +44,7 @@ task test, "Run all tests":
   for threads in ["--threads:off", "--threads:on"]:
     run threads, "tests/test_all"
     build threads, "tests/test_duplicates"
+    run threads, "tests/clispec/test_clispec_all"
 
   #Also iterate over every test in tests/fail, and verify they fail to compile.
   echo "\r\nTest Fail to Compile:"
