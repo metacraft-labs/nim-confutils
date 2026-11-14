@@ -8,7 +8,7 @@ description   = "Simplified handling of command line options and config files"
 license       = "Apache License 2.0"
 skipDirs      = @["tests"]
 
-requires "nim >= 1.6.0",
+requires "nim >= 2.0.0",
          "stew",
          "serialization"
 

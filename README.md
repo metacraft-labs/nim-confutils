@@ -530,6 +530,10 @@ Parsing the command line, help and completion are delegated to the code
 clispec generates, so a program's command line behaves the same whether it
 reads configuration files or not.
 
+The clispec integration needs Nim 2.0 or newer, the version nim-cli-spec
+requires. Because confutils depends on nim-cli-spec, the confutils package
+as a whole requires Nim 2.0 as well.
+
 ```nim
 import std/[os, tables, tempfiles]
 import confutils/clispec_config, confutils/layers/toml_source
