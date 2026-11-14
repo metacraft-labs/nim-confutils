@@ -12,7 +12,10 @@
 ## requiring a failure carrying the message, and on a copy without the
 ## marked line, requiring success: the vacuity guard showing the error came
 ## from that line. The checkout's root is on the path, so a fixture imports
-## ``confutils/clispec_config``. Observing a compile error's message needs the compiler,
+## ``confutils/clispec_config``. Inside a codetracer checkout,
+## ``tests/clispec/config.nims`` passes the pinned dependency paths it builds
+## this test with as ``confutilsTestPaths``, and they are given to the
+## compiler the same way. Observing a compile error's message needs the compiler,
 ## so nothing is mocked.
 
 import std/[os, osproc, strutils, tempfiles, unittest]
@@ -22,6 +25,9 @@ const
   repoDir = currentSourcePath().parentDir().parentDir().parentDir()
   invalidMarker = "# clispec-invalid"
   expectPrefix = "## expect: "
+  confutilsTestPaths {.strdefine.} = ""
+    ## ``|``-separated dependency directories, set by ``config.nims`` in a
+    ## checkout that pins them (empty: Nimble resolves the dependencies).
 
 proc compilerExe(): string =
   result = getCurrentCompilerExe()
@@ -31,6 +37,10 @@ proc compilerExe(): string =
 proc nimCheck(file, nimcache: string): tuple[output: string, exitCode: int] =
   var args = @[compilerExe(), "check", "--hints:off", "--skipParentCfg",
     "--skipUserCfg", "--path:" & repoDir]
+  if confutilsTestPaths.len > 0:
+    args.add("--noNimblePath")
+    for dir in confutilsTestPaths.split('|'):
+      args.add("--path:" & dir)
   for flag in getEnv("NIMFLAGS").splitWhitespace():
     args.add(flag)
   args.add(["--nimcache:" & nimcache, file])
