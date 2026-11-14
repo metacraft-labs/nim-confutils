@@ -508,6 +508,63 @@ produced by Confutils. Possible values are:
 
   All output will be colorless.
 
+## Compile-time options of your own library
+
+A library configured with `-d:name=value` switches can declare each option
+as a typed constant with the attribute macros of `confutils/defines`, instead
+of reading a `{.strdefine.}` string and converting it by hand. The module
+needs only Nim's standard library (Nim 2.0 or later).
+
+```nim
+# mylib.nim
+import confutils/defines
+
+type
+  LogLevel* = enum
+    TRACE, DEBUG, INFO, WARN
+
+  Colors* = enum
+    NoColors, AnsiColors, NativeColors
+
+const
+  mylib_log_level* {.enumDefine.}: LogLevel = INFO
+  mylib_stack_traces* {.flagDefine.} = false
+  mylibColors* {.enumDefine("mylib.colors", offValue = NoColors).} =
+    NativeColors
+
+when isMainModule:
+  echo mylib_log_level, " ", mylib_stack_traces, " ", mylibColors
+```
+
+```text
+$ nim c -r mylib.nim
+INFO false NativeColors
+$ nim c -r -d:mylib_log_level=debug -d:mylib_stack_traces=on -d:mylib.colors=off mylib.nim
+DEBUG true NoColors
+$ nim c -r -d:mylib_log_level=verbose mylib.nim
+mylib.nim(12, 3) Error: invalid value 'verbose' for the compile-time option 'mylib_log_level' (-d:mylib_log_level=verbose); allowed values: TRACE, DEBUG, INFO, WARN (letter case and underscores are ignored)
+```
+
+- Without its `-d:` switch a constant keeps its declared default.
+- `{.flagDefine.}` makes a `bool`. It reads `truthySpellings` (`yes`, `1`,
+  `on`, `true`) as `true` and `falsySpellings` (`no`, `0`, `off`, `false`,
+  `none`) as `false`, in any letter case; a bare `-d:name` is `true`. (The
+  name `boolDefine` is taken: Nim reads it as its built-in `{.booldefine.}`.)
+- `{.enumDefine.}` makes a value of the declared enum type (or of the
+  default's type when none is written). It accepts each value's name and,
+  for an enum with string values, each value's string, ignoring letter case
+  and underscores: `debug`, `Debug` and `DEBUG` all give `DEBUG`.
+  `offValue = X` also reads every falsy spelling as `X`, after the enum's
+  own names were tried.
+- The define's name is the constant's name, unless given as the first
+  argument (`{.flagDefine("mylib.traces").}`) or as `name = "..."`.
+- Any other value is a compile error at the declaration, naming the option,
+  the value and the values it accepts.
+
+The parsing functions behind the macros are exported for run-time use with
+the same spellings: `parseFlagValue`, `parseEnumValue[E]`, `isFalsyValue`
+and `enumValueSpellings[E]`.
+
 ## Command lines described in clispec
 
 Besides a plain configuration type, confutils can be instantiated over a

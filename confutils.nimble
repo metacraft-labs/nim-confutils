@@ -46,6 +46,10 @@ task test, "Run all tests":
     build threads, "tests/test_duplicates"
     run threads, "tests/clispec/test_clispec_all"
 
+  # Compiles a fixture once per `-d:` case, so it runs in one configuration:
+  # what it checks happens at compile time.
+  build "-r", "tests/test_cs_m9b_compile_time_options"
+
   #Also iterate over every test in tests/fail, and verify they fail to compile.
   echo "\r\nTest Fail to Compile:"
   for path in listFiles(thisDir() / "tests" / "fail"):
