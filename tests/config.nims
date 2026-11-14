@@ -3,9 +3,9 @@
 # This fork is consumed as codetracer's `libs/nim-confutils` submodule, and
 # codetracer pins every library it compiles confutils with in sibling `libs/`
 # submodules. Its tests must build against those revisions, not against
-# whatever happens to be installed in `~/.nimble`: a newer `stew` there lacks
-# `stew/shims/net`, and an unpinned `toml_serialization` does not build against
-# the 2022 `serialization` codetracer pins. The test-only dependencies
+# whatever happens to be installed in `~/.nimble`: an unpinned
+# `toml_serialization` does not build against the 2022 `serialization`
+# codetracer pins. The test-only dependencies
 # (`toml_serialization`, `unittest2`) are pinned there too, at revisions
 # compatible with that stack.
 #
