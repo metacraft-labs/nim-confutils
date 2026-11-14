@@ -22,8 +22,10 @@ requires "nim >= 2.0.0",
 # generator helpers confutils uses (among them the value check its loader
 # passes to the parser), can be required through Nimble, and has the opt-in
 # rules that let a confutils type-based command line move onto a clispec
-# description unchanged.
-requires "https://github.com/metacraft-labs/nim-cli-spec#da7668f1794d98478cfe48cf25ff1fca7ba4a091"
+# description unchanged (among them `colonValues` and `equalsTakesNext`,
+# with an unknown flag's error carrying the value written with it, so a
+# program can word it as it did before).
+requires "https://github.com/metacraft-labs/nim-cli-spec#0582cf3c2657bdf7043531bf792e4af82e4647c7"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
