@@ -178,6 +178,7 @@ proc cliConfigurationCode*[C, P](model: CliModel[C, P]; typeName,
   let rootOrigins = ident("cliOriginsOf" & typeName)
   let rootCombine = ident("cliCombine" & typeName)
   let completers = cliCompletersName(names)
+  let valueCheck = cliValueCheckName(names)
   proc exportedName(name: string): NimNode =
     if exported: postfix(nnkAccQuoted.newTree(ident(name)), "*")
     else: nnkAccQuoted.newTree(ident(name))
@@ -191,10 +192,13 @@ proc cliConfigurationCode*[C, P](model: CliModel[C, P]; typeName,
         CliLayeredResolution {.
         raises: [CliUsageError, CliHelpRequest, CliConfigError].} =
       # The command line's completion protocol first, as clispec's own
-      # ``load`` does, then every source.
-      if cliIsCompletionRequest(argv, options):
-        cliCompletionCheck(g, `completers`(), argv, options)
-      cliResolve(g, argv, sources, options)
+      # ``load`` does, then every source. The parser gets the description's
+      # value check, as clispec's ``load`` gives it, for the rules that
+      # need one (``acceptsNextWord``, ``valueErrorsBeforeHelp``).
+      let opts = cliWithValueCheck(options, `valueCheck`)
+      if cliIsCompletionRequest(argv, opts):
+        cliCompletionCheck(g, `completers`(), argv, opts)
+      cliResolve(g, argv, sources, opts)
 
     proc `loadName`(t: typedesc[`T`]; argv: openArray[string];
                     sources: CliSources; options = CliOptions()): `T` {.

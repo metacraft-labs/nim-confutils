@@ -12,4 +12,5 @@ import
   test_cs_m4_default_never_overrides_file,
   test_cs_m4_unknown_key_rejected,
   test_cs_m4b_per_source_convention,
-  test_cs_m4b_override_precedence
+  test_cs_m4b_override_precedence,
+  test_cs_m10_compat_rules_through_merge

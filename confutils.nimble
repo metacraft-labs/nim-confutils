@@ -19,8 +19,11 @@ requires "nim >= 2.0.0",
 # (`confutils/layers`). A program that reads TOML files through
 # `confutils/layers/toml_source` requires `toml_serialization` itself. The
 # pinned nim-cli-spec leaves configuration files to confutils, exports the
-# generator helpers confutils uses and can be required through Nimble.
-requires "https://github.com/metacraft-labs/nim-cli-spec#29792c06ac2ecdea82e10adc78628e832f55d179"
+# generator helpers confutils uses (among them the value check its loader
+# passes to the parser), can be required through Nimble, and has the opt-in
+# rules that let a confutils type-based command line move onto a clispec
+# description unchanged.
+requires "https://github.com/metacraft-labs/nim-cli-spec#da7668f1794d98478cfe48cf25ff1fca7ba4a091"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
