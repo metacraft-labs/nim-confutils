@@ -33,8 +33,6 @@ const
   commandPaths = [@[], @["build"], @["print"], @["run"], @["remote"],
                   @["remote", "push"], @["remote", "pull"], @["plain"]]
   widths = [20, 40, 60, 80, 120, 250]
-  programName = "ct"
-    ## The name this branch's confutils gives the program in help.
 
 proc compilerExe(): string =
   result = getCurrentCompilerExe()
@@ -78,6 +76,19 @@ proc runProbe(exe, mode: string; words: seq[string];
   let output = p.outputStream.readAll()
   result = (output, p.waitForExit())
   p.close()
+
+proc programNameOf(screen: string): string =
+  ## The program name a coloured confutils help screen starts its usage
+  ## line with. Which name confutils uses is its own business (the
+  ## executable's name, or a fixed one in a fork), so the test reads it
+  ## from confutils' output and renders the description with the same.
+  let usage = screen.find("Usage: ")
+  if usage < 0: return ""
+  let start = screen.find("\e[36m", usage)
+  if start < 0: return ""
+  let stop = screen.find("\e[0m", start)
+  if stop < 0: return ""
+  screen[start + "\e[36m".len ..< stop]
 
 proc visible(s: string): string =
   ## ``s`` with escapes made readable, for a failure message.
@@ -157,11 +168,17 @@ suite "test_cs_m10_classic_help":
   let coloured = buildProbe(scratch / "colours", [])
   let plain = buildProbe(scratch / "no_colours", ["confutils_no_colors"])
 
+  let programName = programNameOf(
+    runProbe(coloured.exe, "confutils", @[], 80).output)
+
   test "the probe builds, with and without colours":
     check coloured.exitCode == 0
     check plain.exitCode == 0
     if coloured.exitCode != 0: echo coloured.output
     if plain.exitCode != 0: echo plain.output
+    # The program name is a single word, read from confutils' own screen.
+    check programName.len > 0
+    check ' ' notin programName and '\e' notin programName
 
   for words in commandPaths:
     test "help of '" & words.join(" ") & "' is confutils' at every width":
@@ -178,7 +195,8 @@ suite "test_cs_m10_classic_help":
         if rendered != expected.output:
           echo "  width ", width, ": ",
             firstDifference(expected.output, rendered)
-        let shown = runProbe(coloured.exe, "classic", words, width)
+        let shown = runProbe(coloured.exe, "classic",
+                             @[programName] & words, width)
         check shown.exitCode == 0
         check shown.output == expected.output
         inc compared
@@ -194,7 +212,7 @@ suite "test_cs_m10_classic_help":
   test "without colours, both renderers agree and only the colours differ":
     for words in commandPaths:
       let expected = runProbe(plain.exe, "confutils", words, 80)
-      let shown = runProbe(plain.exe, "classic", words, 80)
+      let shown = runProbe(plain.exe, "classic", @[programName] & words, 80)
       check expected.exitCode == 0
       check shown.exitCode == 0
       check shown.output == expected.output
