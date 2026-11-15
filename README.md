@@ -484,29 +484,14 @@ additional `version` top-level command will be inserted as well.
 
 ## Compile-time options
 
-#### `confutils_colors`
+#### `confutils_no_colors`
 
-This option controls the use of colors appearing in the help messages
-produced by Confutils. Possible values are:
-
-- `NativeColors` (used by default)
-
-  In this mode, Windows builds will produce output suitable for the console
-  application in older versions of Windows. On Unix-like systems, this is
-  equivalent to specifying `AnsiColors`.
-
-- `AnsiColors`
-
-  Output suitable for terminals supporting the standard ANSI escape codes:
-  https://en.wikipedia.org/wiki/ANSI_escape_code
-
-  This includes most terminal emulators on modern Unix-like systems,
-  Windows console replacements such as ConEmu, and the native Console
-  and PowerShell applications on Windows 10.
-
-- `None` or `NoColors`
-
-  All output will be colorless.
+Defining it (`-d:confutils_no_colors`) turns off the colours and styles
+in the help and error messages produced by Confutils. By default they
+are on: ANSI escape codes on Unix-like systems, console attributes on
+Windows (through Nim's `terminal` module). The attribute resets that
+`styledWrite` adds are still written. Under NimScript the output is
+always colourless.
 
 ## Compile-time options of your own library
 
