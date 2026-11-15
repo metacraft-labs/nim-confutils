@@ -24,8 +24,10 @@ requires "nim >= 2.0.0",
 # rules that let a confutils type-based command line move onto a clispec
 # description unchanged (among them `colonValues` and `equalsTakesNext`,
 # with an unknown flag's error carrying the value written with it, so a
-# program can word it as it did before).
-requires "https://github.com/metacraft-labs/nim-cli-spec#0582cf3c2657bdf7043531bf792e4af82e4647c7"
+# program can word it as it did before, and `rest` positionals, which stand
+# for `{.restOfArgs.}` fields in the classic help confutils renders over a
+# description, `confutils/clispec_classic_help`).
+requires "https://github.com/metacraft-labs/nim-cli-spec#79be7d7bdcea48db4e4ae837f0ee183653e391bf"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
