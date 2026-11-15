@@ -60,14 +60,49 @@
 ## A consumer whose clispec model carries an extension generates the same
 ## code from its own macro: ``cliProgramCode`` followed by
 ## ``cliConfigurationCode``.
+##
+## A program moving from a confutils configuration type onto a description
+## can keep that type's help screens and its runtime surface:
+##
+## * ``Tool.cliClassicHelp(commandPath)`` / ``Tool.showClassicHelp`` render
+##   the help confutils printed for the equivalent type
+##   (``confutils/clispec_classic_help``, exported here);
+## * ``Tool.surfaceFromModel(programName)`` is the ``RuntimeCommandSurface``
+##   ``surfaceFromType`` gave for it.
+##
+## Both show a parameter's default as its ``default`` is written. A
+## parameter may declare ``defaultValueDesc = "<text>"`` (a string literal),
+## confutils' ``{.defaultValueDesc.}``: the text they show instead. It
+## changes nothing else; clispec's own help still shows the ``default``.
+## ``Tool.cliClassicGrammar`` is the grammar with those texts applied.
 
 import std/[macros, strutils]
 
 import clispec
 
 import ./layers/[origins, sources, merge]
+import ./[clispec_classic_help, defs]
 
-export clispec, origins, sources, merge
+export clispec, origins, sources, merge, clispec_classic_help
+
+type
+  ConfutilsParamExtension* = object
+    ## What ``cliConfiguration`` reads from a parameter declaration beyond
+    ## what clispec does: ``defaultValueDesc = "<text>"``.
+    hasDefaultValueDesc*: bool
+    defaultValueDesc*: string
+
+proc parseCliParamExtension*(ext: var ConfutilsParamExtension;
+                             kind: CliParamKind; arg: NimNode): bool =
+  ## Claims ``defaultValueDesc = "<text>"``.
+  if arg.kind == nnkExprEqExpr and cliIdentText(arg[0]).normalize ==
+      "defaultvaluedesc":
+    if ext.hasDefaultValueDesc:
+      error("clispec: defaultValueDesc is given twice", arg)
+    ext.defaultValueDesc = cliStrLit(arg[1], "defaultValueDesc")
+    ext.hasDefaultValueDesc = true
+    return true
+  false
 
 proc combineChecks[P](decls: seq[CliParam[P]]): NimNode =
   ## A compile error naming the parameter for a combine proc that cannot be
@@ -244,6 +279,113 @@ proc cliConfigurationCode*[C, P](model: CliModel[C, P]; typeName,
       ## named source the description declares) spells them.
       cliConfigSchemaOf(`T`.cliGrammar(), source)
 
+proc cliClassicGrammarCode*[C](model: CliModel[C, ConfutilsParamExtension];
+                              typeName, program: string;
+                              exported: bool): NimNode =
+  ## ``proc cliClassicGrammar(t: typedesc[<typeName>]): CliGrammar``: the
+  ## grammar with every ``defaultValueDesc`` text applied
+  ## (``cliApplyDefaultValueDescs``), which the classic help and
+  ## ``surfaceFromModel`` read. ``model`` is the description parsed with
+  ## ``ConfutilsParamExtension`` (``parseCliModel[C,
+  ## ConfutilsParamExtension]``); ``cliConfiguration`` places the result
+  ## after ``cliConfigurationCode``'s output.
+  var problems: seq[CliGrammarProblem] = @[]
+  var decls: seq[CliParam[ConfutilsParamExtension]] = @[]
+  discard cliGrammarOf(model, program, problems, decls)
+  var descs = nnkBracket.newTree()
+  for id, d in decls:
+    if d.ext.hasDefaultValueDesc:
+      descs.add(nnkTupleConstr.newTree(newLit(id),
+        newLit(d.ext.defaultValueDesc)))
+  let T = ident(typeName)
+  let name = if exported: postfix(ident("cliClassicGrammar"), "*")
+             else: ident("cliClassicGrammar")
+  result = quote do:
+    proc `name`(t: typedesc[`T`]): CliGrammar =
+      ## The grammar, with the ``defaultValueDesc`` texts applied.
+      result = `T`.cliGrammar()
+      const texts: seq[tuple[id: int, text: string]] = @`descs`
+      cliApplyDefaultValueDescs(result, texts)
+
+# ---------------------------------------------------------------------------
+# The runtime surface of a description.
+# ---------------------------------------------------------------------------
+
+func classicIsSwitch(typeName: string): bool =
+  ## Whether confutils' type-based parser treats a field of this type as a
+  ## switch (``bool`` and ``Option[bool]``, spelt as written), the rule
+  ## ``surfaceFromType`` reports as ``takesValue``.
+  let t = typeName.multiReplace((" ", ""))
+  t in ["bool", "system.bool", "Option[bool]", "options.Option[bool]",
+        "Option[system.bool]", "options.Option[system.bool]"]
+
+func surfaceFlag(g: CliGrammar; p: ClassicParam): RuntimeFlag =
+  let gp = g.params[p.id]
+  result.name = p.name
+  if p.abbr.len == 1:
+    result.short = p.abbr[0]
+  elif p.abbr.len > 1:
+    result.aliases.add(p.abbr)
+  result.description = p.desc
+  result.longDescription = p.longDesc
+  result.typeHint = p.typeName
+  result.required = not gp.hasDefault
+  result.default = p.defaultText
+  result.takesValue = not classicIsSwitch(p.typeName)
+  result.valueOptional = gp.hasOptionalValue
+  result.valueName = gp.placeholder
+
+func surfaceCommand(g: CliGrammar; cmd: ClassicCommand;
+                    defaultCommandName: string): RuntimeCommand
+
+func surfaceSubcommands(g: CliGrammar; cmd: ClassicCommand;
+                        defaultCommandName: string): seq[RuntimeCommand] =
+  for i, sub in cmd.subcommands:
+    if i == cmd.defaultSubcommand and defaultCommandName.len == 0:
+      continue
+    result.add(surfaceCommand(g, sub, defaultCommandName))
+
+func surfaceCommand(g: CliGrammar; cmd: ClassicCommand;
+                    defaultCommandName: string): RuntimeCommand =
+  result.name = if g.commands[cmd.command].isCall: defaultCommandName
+                else: cmd.name
+  result.description = cmd.desc
+  for p in cmd.params:
+    if p.kind == ckSwitch and not p.hidden:
+      result.flags.add(surfaceFlag(g, p))
+  result.subcommands = surfaceSubcommands(g, cmd, defaultCommandName)
+
+func surfaceFromModel*(g: CliGrammar; programName = "";
+                       defaultCommandName = ""): RuntimeCommandSurface =
+  ## The ``RuntimeCommandSurface`` ``surfaceFromType`` gives for the
+  ## confutils type equivalent to the description of ``g`` (see
+  ## ``confutils/clispec_classic_help``): the root's shown flags are the
+  ## global flags, every listed ``subcmd`` a command with its shown flags
+  ## and its subcommands, nested. A flag's ``required`` is "has no
+  ## ``default``", its ``default`` the text help shows, ``takesValue``
+  ## false for ``bool`` and ``Option[bool]``, ``valueOptional`` whether it
+  ## has an ``optionalValue`` and ``valueName`` its ``valueName``.
+  ##
+  ## ``surfaceFromType`` also lists the discriminator's default value as a
+  ## command; a ``call:`` has no name, so it is listed, first (as an enum
+  ## that starts with its default value lists it) and under
+  ## ``defaultCommandName``, only when that is given.
+  let root = cliClassicCommand(g, 0)
+  result.programName = programName
+  for p in root.params:
+    if p.kind == ckSwitch and not p.hidden:
+      result.globalFlags.add(surfaceFlag(g, p))
+  result.commands = surfaceSubcommands(g, root, defaultCommandName)
+
+proc surfaceFromModel*[T](t: typedesc[T]; programName = "";
+                          defaultCommandName = ""): RuntimeCommandSurface =
+  ## ``surfaceFromModel`` over the grammar of the description ``T``, with
+  ## its ``defaultValueDesc`` texts.
+  mixin cliGrammar, cliClassicGrammar
+  let g = when compiles(cliClassicGrammar(T)): cliClassicGrammar(T)
+          else: cliGrammar(T)
+  surfaceFromModel(g, programName, defaultCommandName)
+
 macro cliConfiguration*(args: varargs[untyped]): untyped =
   ## Generates, from a clispec ``cli:`` description, what clispec's
   ## ``cliProgram`` generates (the configuration object, its command-line
@@ -259,3 +401,10 @@ macro cliConfiguration*(args: varargs[untyped]): untyped =
     NoCliExtension())
   result = cliProgramCode(model, a.typeName, a.program, a.exported)
   result.add(cliConfigurationCode(model, a.typeName, a.program, a.exported))
+  # ``Tool.cliModel`` stays a plain model; ``defaultValueDesc`` is read by
+  # parsing the description once more with confutils' parameter extension
+  # (the first parse has reported any problem with it).
+  let classic = parseCliModel[NoCliExtension, ConfutilsParamExtension](
+    a.body, NoCliExtension())
+  result.add(cliClassicGrammarCode(classic, a.typeName, a.program,
+                                   a.exported))

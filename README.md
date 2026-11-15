@@ -767,6 +767,62 @@ configuration object (`ToolOrigins`, `ToolBuildOrigins`, ..., with the same
 `cliDescribe(origin)` puts it in one line, for a debug report or an
 `--explain` option.
 
+#### Moving a configuration type onto a description
+
+A program whose command line is a confutils configuration type can describe
+it in clispec and keep both its help screens and its runtime surface:
+
+```nim
+import confutils/clispec_config
+
+cliConfiguration(Tool, "tool"):
+  boolFlag verbose is bool, short = 'v', default = false,
+    help = "Print more"
+  flag cacheDir is string, perSource = [cli = "cache-dir"],
+    default = "/tmp/tool", defaultValueDesc = "$HOME/.cache/tool",
+    help = "Where results are cached"
+  call:
+    discard
+  subcmd "build":
+    flag jobs is int, short = 'j', default = 4, help = "Parallel jobs"
+    pos target is string, help = "What to build"
+
+echo Tool.cliClassicHelp(["build"], copyrightBanner = "Tool 1.0")
+Tool.showClassicHelp([])          # writes the help to stdout
+let surface = Tool.surfaceFromModel("tool", defaultCommandName = "noCommand")
+```
+
+`cliClassicHelp(commandPath, programName, copyrightBanner, width)`
+(`confutils/clispec_classic_help`, which `confutils/clispec_config`
+exports) renders, byte for byte, the help `load` prints for the equivalent
+type: the banner, the `Usage:` frame, the colours (none under
+`-d:confutils_no_colors`), the abbreviation and name columns, the wrapping
+(to `terminalWidth()` by default, which reads `COLUMNS` first), the
+narrow-terminal layout, ` [=<default>].` after each description, the
+positionals that end a command, and a block per subcommand. The equivalent
+type declares the same parameters in the same order: a flag is a field
+with that long `{.name.}`, `short = 'x'` is `{.abbr: "x".}` (a long
+`alias = "--xy"` is `{.abbr: "xy".}`), `pos` is `{.argument.}`, a
+`rest = true` positional is `{.restOfArgs.}`, `help` is `{.desc.}`,
+`longHelp` is `{.longDesc.}`, `visibility = hidden` is `{.hidden.}`, the
+subcommands are the values of an enum `{.command.}` discriminator declared
+after the command's other fields, and `call:` is that discriminator's
+`{.defaultValue.}`. A default is shown as its `default` expression is
+written (a string literal unquoted), which is the text confutils shows for
+`{.defaultValue.}`; `defaultValueDesc = "<text>"` is `{.defaultValueDesc.}`,
+the text shown instead. It changes only this help and the surface; clispec's
+own help shows the `default`.
+
+`surfaceFromModel(programName, defaultCommandName)` is the
+`RuntimeCommandSurface` `surfaceFromType` gives for the equivalent type:
+global flags, commands, nested subcommands and each flag's short name,
+description, type, `required` (no `default`), default text and value kind.
+`surfaceFromType` lists the discriminator's default value as a command too;
+a `call:` has no name, so it is listed, first, only under
+`defaultCommandName`. Both procedures also take a `CliGrammar` in place of
+the type (`Tool.cliClassicGrammar()` is the grammar with the
+`defaultValueDesc` texts applied).
+
 ## Contributing
 
 The development of Confutils is sponsored by [Status.im](https://status.im/)
