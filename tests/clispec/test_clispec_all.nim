@@ -15,4 +15,5 @@ import
   test_cs_m4b_override_precedence,
   test_cs_m10_compat_rules_through_merge,
   test_cs_m10_classic_help,
-  test_cs_m6_after_separator_through_confutils
+  test_cs_m6_after_separator_through_confutils,
+  test_cs_m6_retired_spellings_through_confutils
