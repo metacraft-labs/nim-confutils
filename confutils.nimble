@@ -28,8 +28,9 @@ requires "nim >= 2.0.0",
 # for `{.restOfArgs.}` fields in the classic help confutils renders over a
 # description, `confutils/clispec_classic_help`, and `loneDashesAreFlags`
 # and `exactOneLetterFlags`, which read a lone `-` or `--` and one-letter
-# option names as confutils' own parser does).
-requires "https://github.com/metacraft-labs/nim-cli-spec#652db72eb38a655ff14a9ab010240bd8005b5e94"
+# option names as confutils' own parser does, and `afterSeparator`
+# positionals, which only the words after `--` fill).
+requires "https://github.com/metacraft-labs/nim-cli-spec#2316497b971dbdd14395311085234b6b6da4f147"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
