@@ -30,8 +30,10 @@ requires "nim >= 2.0.0",
 # and `exactOneLetterFlags`, which read a lone `-` or `--` and one-letter
 # option names as confutils' own parser does, `afterSeparator`
 # positionals, which only the words after `--` fill, and `retired`
-# spellings, refused with an error that names their replacement).
-requires "https://github.com/metacraft-labs/nim-cli-spec#8c36bf19c98f551f8eaa03e9d12ecad387f3a081"
+# spellings, refused with an error that names their replacement). It also
+# writes a parsed command line back to argv words (`cliArgvOf`), which the
+# generated `argvOf` over an origin object calls.
+requires "https://github.com/metacraft-labs/nim-cli-spec#acd5bb0bf4bf3ebf24dc4975e8b922f2498a4926"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)

@@ -153,6 +153,8 @@ proc cliMerge*(g: CliGrammar; tokens: CliTokens; sourced: CliSourced;
         if inValue:
           r.merged[id].add(c)
           origin.values.add(cliCandidateValueText(c))
+          if c.source == csCli:
+            origin.commandLine.add(c)
         else:
           r.overridden[id].add(c)
         if k == winner and eff[j]:

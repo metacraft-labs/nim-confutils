@@ -103,6 +103,14 @@ type
       ## Every other candidate, in the order the merge considered them:
       ## configuration layers lowest first, then the environment, then the
       ## command line, each in its own order.
+    commandLine*: seq[CliCandidate]
+      ## The occurrences on the command line that are part of the value, in
+      ## argv order (clispec's candidates, with the argv index and spelling
+      ## of each and the flag whose ``alsoSets`` gave it): every one for a
+      ## list or a counted flag, the last for anything else, and none when
+      ## the command line supplied none of the value or an enforced value
+      ## ignored it. Clispec's ``cliArgvOf`` writes them back as argv words
+      ## (the generated ``argvOf``).
 
   CliSourcedValue*[T] = object
     ## One source's value, as a combine proc receives it.

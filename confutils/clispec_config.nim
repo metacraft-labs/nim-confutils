@@ -53,6 +53,13 @@
 ## * ``Tool.configSchema`` and ``Tool.configSchema(source)``, the schema of
 ##   the program's configuration files, with its keys spelt as the ``file``
 ##   source or the named file source ``source`` spells them;
+## * ``argvOf(origins, only, group, commandWords, options)`` over the origin
+##   object of any command (``ToolOrigins``, ``ToolBuildOrigins``, ...):
+##   the command-line part of the configuration written back as argv words
+##   (clispec's ``cliArgvOf``), for a program that hands the flags it was
+##   given to another command line. A value another source gave is not
+##   written, so the words, parsed with the same sources, give the same
+##   configuration;
 ## * a compile-time check of every combine proc (``merge = <proc>``): it
 ##   must be callable as ``proc (candidates:
 ##   openArray[CliSourcedValue[T]]): T`` for the parameter's type ``T``.
@@ -206,6 +213,76 @@ proc cliConfigurationCode*[C, P](model: CliModel[C, P]; typeName,
       result.add(builder)
       result.add(cliShapedVisitorProc(g, names, k, "cliCombine",
         @[lrParam.copyNimTree], combineStmts, @[ident("CliUsageError")]))
+
+  # ``argvOf``: per command with an object, a collector of the command-line
+  # candidates its origin object records (and the commands it selects),
+  # innermost first, and the exported procedure over it.
+  let givenParam = newIdentDefs(ident("given"), nnkVarTy.newTree(
+    nnkBracketExpr.newTree(ident("seq"), nnkBracketExpr.newTree(ident("seq"),
+      bindSym("CliCandidate")))))
+  let selectedParam = newIdentDefs(ident("selected"), nnkVarTy.newTree(
+    nnkBracketExpr.newTree(ident("seq"), ident("int"))))
+  for k in countdown(g.commands.high, 0):
+    if not cliHasObject(g, k):
+      continue
+    let originType = ident(names.typeNames[k] & suffix)
+    let collect = ident("cliCollectArgvOf" & names.typeNames[k] & suffix)
+    var body = newStmtList(newCall(newDotExpr(ident("selected"), ident("add")),
+      newLit(k)))
+    let call = g.commands[k].callChild
+    if call >= 0 and g.commands[k].children.len == 0:
+      body.add(newCall(newDotExpr(ident("selected"), ident("add")),
+        newLit(call)))
+    for id in cliObjectHolds(g, k):
+      body.add(newAssignment(
+        nnkBracketExpr.newTree(ident("given"), newLit(id)),
+        newDotExpr(newDotExpr(ident("o"),
+          nnkAccQuoted.newTree(ident(g.params[id].name))),
+          ident("commandLine"))))
+    let kids = cliBranches(g, k)
+    if kids.len > 0:
+      let enumName = ident(cliCommandEnumName(names, k))
+      var caseStmt = nnkCaseStmt.newTree(newDotExpr(ident("o"),
+        ident("command")))
+      for kid in kids:
+        let field = names.fieldOfChild[kid]
+        caseStmt.add(nnkOfBranch.newTree(
+          newDotExpr(enumName, nnkAccQuoted.newTree(ident(field))),
+          newStmtList(newCall(
+            ident("cliCollectArgvOf" & names.typeNames[kid] & suffix),
+            newDotExpr(ident("o"), nnkAccQuoted.newTree(ident(field))),
+            ident("given"), ident("selected")))))
+      body.add(caseStmt)
+    let collector = newProc(collect, params = [newEmptyNode(),
+      newIdentDefs(ident("o"), originType), givenParam.copyNimTree,
+      selectedParam.copyNimTree], body = body)
+    collector.addPragma(nnkExprColonExpr.newTree(ident("raises"),
+      nnkBracket.newTree()))
+    result.add(collector)
+    let argvOfName = if exported: postfix(ident("argvOf"), "*")
+                     else: ident("argvOf")
+    let T0 = ident(typeName)
+    let valueCheck0 = cliValueCheckName(names)
+    result.add quote do:
+      proc `argvOfName`(o: `originType`; only: openArray[string] = [];
+                        group = ""; commandWords = true;
+                        options = CliOptions()): seq[string] {.
+          raises: [ValueError].} =
+        ## The command-line part of a loaded configuration, as argv words
+        ## (clispec's ``cliArgvOf``): the words that give the parameters
+        ## ``only`` names (every one when empty), or those of the parameter
+        ## group ``group``, the values the command line gave them, each
+        ## flag in its declared long spelling, preceded by the subcommand
+        ## words below this command unless ``commandWords`` is false. A
+        ## value that an environment variable, a configuration file, a
+        ## default or an implication gave is not written: parsed with the
+        ## same sources, the words give the same configuration.
+        let g = `T0`.cliGrammar()
+        var given = newSeq[seq[CliCandidate]](g.params.len)
+        var selected: seq[int] = @[]
+        `collect`(o, given, selected)
+        cliArgvOf(g, selected, given, cliRenderParams(g, selected, only,
+          group), commandWords, cliWithValueCheck(options, `valueCheck0`))
 
   let T = ident(typeName)
   let O = ident(typeName & suffix)

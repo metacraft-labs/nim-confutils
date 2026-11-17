@@ -752,6 +752,38 @@ configuration object (`ToolOrigins`, `ToolBuildOrigins`, ..., with the same
 `cliDescribe(origin)` puts it in one line, for a debug report or an
 `--explain` option.
 
+`commandLine` holds the occurrences on the command line that are part of
+the value (clispec's candidates: each with its argv index, its spelling and
+the flag whose `alsoSets` gave it), in argv order: every one for a list or a
+counted flag, the last for anything else, and none when the command line
+supplied none of the value or a binding layer ignored it.
+
+#### Writing the command line back
+
+A program that hands the flags it was given to another command line (a
+`test` command that runs a `build`, a front end that re-executes itself)
+gets the words from the origin object of any command:
+
+```nim
+let (conf, origins) = Tool.loadWithOrigins(argv, sources)
+let all = argvOf(origins)                      # the whole command line
+let some = argvOf(origins.build, only = ["jobs", "target"])
+```
+
+`argvOf(origins, only = [], group = "", commandWords = true, options)`
+writes the command-line part of the configuration as clispec's
+`cliArgvOf` does (every flag in its long spelling, values attached, the
+subcommand words below the command first unless `commandWords` is false,
+the positionals, `--` where one is needed; see the clispec README, "Writing
+a command line back"). A value that an environment variable, a file, a
+default or an implication gave is never written, and under
+`merge = append` only the command line's part of the value is: the words,
+loaded with the same sources, give the same configuration, each value from
+the same kind of source. `only` names parameters by their declared names
+(one the command does not hold is skipped, so the flags of one command
+select the same flags of another; a name no parameter has raises
+`ValueError`) and `group` selects a parameter group.
+
 #### Moving a configuration type onto a description
 
 A program whose command line is a confutils configuration type can describe
