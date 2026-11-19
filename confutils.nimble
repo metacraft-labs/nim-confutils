@@ -32,8 +32,11 @@ requires "nim >= 2.0.0",
 # positionals, which only the words after `--` fill, and `retired`
 # spellings, refused with an error that names their replacement). It also
 # writes a parsed command line back to argv words (`cliArgvOf`), which the
-# generated `argvOf` over an origin object calls.
-requires "https://github.com/metacraft-labs/nim-cli-spec#acd5bb0bf4bf3ebf24dc4975e8b922f2498a4926"
+# generated `argvOf` over an origin object calls. It also holds the
+# configuration value tree confutils' file formats parse into, and the checks
+# of a file's keys and values against a description
+# (`clispec/config_check`), which the layer loader runs.
+requires "https://github.com/metacraft-labs/nim-cli-spec#fcd5b309c2cb38656d8d2c3b39a7c4e72b5dfb3a"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)

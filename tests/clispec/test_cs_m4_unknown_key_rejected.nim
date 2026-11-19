@@ -3,7 +3,8 @@
 ## key is an error naming the file, the line and the key; a file without
 ## the top-level ``schema`` string, or with another schema, is rejected; a
 ## value of the wrong type names its key and line; the ``extensions`` table
-## is the escape hatch and is never read.
+## is the escape hatch and is never read. A key that differs from a valid
+## one only by naming convention is reported with the valid spelling.
 ##
 ## Real TOML files in a temporary directory and the real ``Cfg`` program
 ## (``cs_m4_fixture``), read through the TOML adapter; nothing is mocked.
@@ -53,6 +54,11 @@ suite "test_cs_m4_unknown_key_rejected":
     if e != nil:
       check e.kind == cfeUnknownKey
       check e.key == "writeReport"
+      # Only the convention differs, so the error names the spelling the
+      # layer's convention gives (clispec's check, shared with writers).
+      check e.expected == "write_report"
+      check e.msg == f & ":2: unknown key 'writeReport' (did you mean " &
+        "'write_report'?) (layer 'user')"
 
   test "a parameter that files may not supply has no key":
     let f = s.file("note.toml", header & "note = \"n\"\n")

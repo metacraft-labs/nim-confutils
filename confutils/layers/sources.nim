@@ -56,8 +56,16 @@
 ##   an array of these for a list parameter. A counted flag takes an
 ##   integer.
 ##
-## An unknown key, a missing or wrong ``schema`` or a value of the wrong
-## type is a ``CliConfigError`` naming the file, the line and the key.
+## These checks are clispec's own (``clispec/config_check``), run over the
+## table it derives from the description, so a program that writes a file
+## for this one and checks it there writes a file that loads here. An
+## unknown key (with the key's spelling in the layer's convention suggested
+## when only the convention differs), a missing or wrong ``schema`` or a
+## value of the wrong type is a ``CliConfigError`` naming the file, the
+## line and the key. A value outside its parameter's closed value set (which
+## clispec's check also reports) is rejected when it is converted, as a
+## usage error of kind ``cekInvalidValue`` naming the file and the line, like
+## any value its type does not accept.
 ## Values are read verbatim: nothing is interpolated or expanded.
 ##
 ## The environment
@@ -69,13 +77,15 @@
 ## the parameter declares a ``separator``, a delimited list of them. A
 ## variable that is present but empty supplies the empty string.
 
-import std/[envvars, json, os, strutils, tables]
+import std/[envvars, json, os, tables]
 
-import clispec/[model, grammar, candidates]
+import clispec/[model, grammar, candidates, config_check]
 
 import ./origins
 
 export tables, origins
+export CliConfigValueKind, CliConfigValue, CliConfigEntry, CliConfigDocument,
+  CliSchemaKey, CliExtensionsKey
 
 type
   CliConfigErrorKind* = enum
@@ -93,7 +103,8 @@ type
     cfeUnknownKey = "unknown key"
       ## A key that names no parameter (and is not under ``extensions``).
     cfeWrongType = "wrong type"
-      ## A value of the wrong type for its key (``expected`` says which).
+      ## A value of the wrong type for its key (``expected`` says which),
+      ## a table where a value belongs included.
     cfeNoSchemaDeclared = "no schema declared"
       ## The program loads a configuration file but its description
       ## declares no ``configSchema``, so no file can be valid.
@@ -114,7 +125,8 @@ type
       ## The name of the layer the file was loaded as.
     expected*: string
       ## What would have been accepted (``cfeWrongType``,
-      ## ``cfeWrongSchema``).
+      ## ``cfeWrongSchema``); for ``cfeUnknownKey``, the key that differs
+      ## from the one written only by naming convention, when there is one.
     detail*: string
       ## The format's own message (``cfeSyntax``, ``cfeUnreadable``), or
       ## the value found (``cfeWrongSchema``, ``cfeWrongType``).
@@ -134,7 +146,9 @@ func cliConfigErrorMessage*(kind: CliConfigErrorKind; path: string;
         expected & "\""
     of cfeWrongSchema:
       "declares schema \"" & detail & "\"; expected \"" & expected & "\""
-    of cfeUnknownKey: "unknown key '" & key & "'"
+    of cfeUnknownKey:
+      "unknown key '" & key & "'" &
+        (if expected.len > 0: " (did you mean '" & expected & "'?)" else: "")
     of cfeWrongType:
       "key '" & key & "' has " & detail & "; expected " & expected
     of cfeNoSchemaDeclared:
@@ -153,45 +167,6 @@ proc newCliConfigError*(kind: CliConfigErrorKind; path: string; line = 0;
     detail)
 
 type
-  CliConfigValueKind* = enum
-    ## The kind of a value a format adapter read.
-    ccvString = "a string"
-    ccvInteger = "an integer"
-    ccvFloat = "a float"
-    ccvBool = "a bool"
-    ccvDateTime = "a date-time"
-    ccvArray = "an array"
-    ccvTable = "a table"
-      ## A table inside an array (tables elsewhere are flattened into
-      ## entries).
-    ccvTableArray = "an array of tables"
-
-  CliConfigValue* = object
-    ## One value of a configuration file.
-    kind*: CliConfigValueKind
-    text*: string
-      ## A scalar's value as text: a string's content, an integer in
-      ## decimal, a float as Nim prints it, ``true`` or ``false``, a
-      ## date-time as written.
-    items*: seq[CliConfigValue]
-      ## An array's elements.
-
-  CliConfigEntry* = object
-    ## One key of a configuration file with its value.
-    key*: seq[string]
-      ## The key's segments, from the top of the file (a table header's
-      ## segments followed by the key's own).
-    value*: CliConfigValue
-    line*: int
-      ## The line the key is written on (1-based).
-
-  CliConfigDocument* = object
-    ## What a format adapter read from a file.
-    entries*: seq[CliConfigEntry]
-      ## Every value, in file order. Tables (inline ones included) are
-      ## flattened into their values; an array of tables is one entry of
-      ## kind ``ccvTableArray`` on the line of its first header.
-
   CliConfigParser* = proc (path, content: string): CliConfigDocument {.
     gcsafe, raises: [CliConfigError].}
     ## A format adapter: reads ``content`` (the text of the file at
@@ -265,28 +240,6 @@ type
     keys*: seq[CliConfigKey]
       ## Every valid key, in declaration order.
 
-const
-  CliSchemaKey* = "schema"
-    ## The top-level key every configuration file declares its schema in.
-  CliExtensionsKey* = "extensions"
-    ## The top-level table a program never reads: the escape hatch.
-
-func keyText(segments: openArray[string]): string =
-  ## A key as a message shows it: segments joined with ``.``, a segment
-  ## that needs it quoted.
-  for i, s in segments:
-    if i > 0:
-      result.add('.')
-    var bare = s.len > 0
-    for ch in s:
-      if ch notin {'a'..'z', 'A'..'Z', '0'..'9', '_', '-'}:
-        bare = false
-    if bare: result.add(s) else: result.add(escape(s))
-
-func keyIndex(segments: openArray[string]): string =
-  ## A key's segments as one table key (segments may contain ``.``).
-  segments.join("\0")
-
 func cliConfigSchemaOf*(g: CliGrammar;
                         source = CliSourceFile): CliConfigSchema =
   ## The configuration-file schema of a grammar: every parameter that a file
@@ -342,32 +295,6 @@ proc cliConfigSchemaJson*(s: CliConfigSchema): string =
     "source": (if s.source.len > 0: s.source else: CliSourceFile),
     "conventions": conventions})
 
-func fits(v: CliConfigValue; t: CliConfigType): bool =
-  case t
-  of cctString: v.kind == ccvString
-  of cctInteger: v.kind == ccvInteger
-  of cctFloat: v.kind in {ccvFloat, ccvInteger}
-  of cctBool: v.kind == ccvBool
-
-func expectedText(t: CliConfigType; list: bool): string =
-  let one = case t
-    of cctString: "a string"
-    of cctInteger: "an integer"
-    of cctFloat: "a number"
-    of cctBool: "true or false"
-  if list: "an array of " & (case t
-    of cctString: "strings"
-    of cctInteger: "integers"
-    of cctFloat: "numbers"
-    of cctBool: "bools")
-  else: one
-
-func foundText(v: CliConfigValue): string =
-  case v.kind
-  of ccvString: "the string " & escape(v.text)
-  of ccvInteger, ccvFloat, ccvBool, ccvDateTime: $v.kind & " " & v.text
-  else: $v.kind
-
 func cliLayerSource*(g: CliGrammar; layer: CliLayer;
                      format: CliConfigFormat): string =
   ## The file source whose spelling a layer's keys use: the named source
@@ -417,12 +344,11 @@ proc cliLoadLayer*(g: CliGrammar; layer: CliLayer; index: int;
       else: layer.path), e.line, e.key, layer.name, e.expected, e.detail)
 
   # The keys as this layer's source spells them: a key spelt in another
-  # source's convention is unknown here.
+  # source's convention is unknown here. The checks are clispec's
+  # (``clispec/config_check``), the same a program writing such a file for
+  # this one runs, so a file that passes them there loads here.
   let source = cliLayerSource(g, layer, format)
-  var byKey = initTable[string, int]()
-  for id, p in g.params:
-    if p.configKey.len > 0 and csFile in p.sources:
-      byKey[keyIndex(cliSourceKeyOf(p, source).split('.'))] = id
+  let table = cliConfigTableOf(g, source)
 
   var schemaSeen = false
   for e in doc.entries:
@@ -432,7 +358,7 @@ proc cliLoadLayer*(g: CliGrammar; layer: CliLayer; index: int;
         raise newCliConfigError(cfeWrongSchema, layer.path, e.line,
           CliSchemaKey, layer.name, g.configSchema,
           (if e.value.kind == ccvString: e.value.text
-           else: foundText(e.value)))
+           else: cliConfigFoundText(e.value)))
   if not schemaSeen:
     raise newCliConfigError(cfeMissingSchema, layer.path, layer = layer.name,
       expected = g.configSchema)
@@ -441,26 +367,23 @@ proc cliLoadLayer*(g: CliGrammar; layer: CliLayer; index: int;
     if e.key.len == 0 or e.key == @[CliSchemaKey] or
         e.key[0] == CliExtensionsKey:
       continue
-    let key = keyText(e.key)
-    let id = byKey.getOrDefault(keyIndex(e.key), -1)
-    if id < 0:
-      raise newCliConfigError(cfeUnknownKey, layer.path, e.line, key,
-        layer.name)
+    let issue = cliCheckEntry(table, e.key, e.value, line = e.line)
+    case issue.kind
+    of cikNone, cikNotAllowed:
+      # A value outside its closed set is left to the conversion, which
+      # rejects it as an invalid value naming the file and the line, as it
+      # rejects every value its type does not accept.
+      discard
+    of cikUnknownKey:
+      raise newCliConfigError(cfeUnknownKey, layer.path, e.line, issue.key,
+        layer.name, issue.suggestion)
+    of cikWrongType, cikMissingSchema, cikWrongSchema:
+      raise newCliConfigError(cfeWrongType, layer.path, e.line, issue.key,
+        layer.name, issue.expected, issue.found)
+    let key = issue.key
+    let id = table.entries[cliConfigFind(table, e.key)].paramId
     let p = g.params[id]
     let list = p.isList and not p.counted
-    let t = if p.counted: cctInteger else: p.configType
-    var ok = false
-    if list:
-      ok = e.value.kind == ccvArray
-      if ok:
-        for item in e.value.items:
-          if not fits(item, t):
-            ok = false
-    else:
-      ok = fits(e.value, t)
-    if not ok:
-      raise newCliConfigError(cfeWrongType, layer.path, e.line, key,
-        layer.name, expectedText(t, list), foundText(e.value))
     var c = CliCandidate(source: csFile, form: ccfValue, argvIndex: -1,
       valueArgvIndex: -1, group: index)
     let site = CliSite(kind: if layer.binding: cokEnforced else: cokFile,
